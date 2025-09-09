@@ -33,6 +33,7 @@
   /* Mobile option A: horizontal scrollable nav */
   header nav{display:flex; gap:8px; overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; scrollbar-width:none}
   header nav::-webkit-scrollbar{display:none}
+  header nav a{display:inline-flex; padding:8px 12px; border:1px solid var(--line); border-radius:999px; color:#E5E7EB; text-decoration:none}
 
   main section{padding:54px 0}
   .hero{display:grid; grid-template-columns:1.2fr 1fr; gap:28px; padding:60px 0 36px}
@@ -40,7 +41,7 @@
   h1{font-size:clamp(28px,5vw,54px); line-height:1.1; margin:14px 0}
   .lead{font-size:clamp(15px,1.6vw,18px); color:#CBD5E1}
   .cta{display:flex; gap:12px; margin-top:18px; flex-wrap:wrap}
-  .btn{display:inline-block; border:none; border-radius:12px; padding:12px 16px; font-weight:700; cursor:pointer}
+  .btn{display:inline-block; border:none; border-radius:12px; padding:12px 16px; font-weight:700; cursor:pointer; text-decoration:none}
   .btn-primary{background:linear-gradient(135deg,var(--brand-blue),#6366F1); color:#0B1220; box-shadow:var(--shadow)}
   .btn-ghost{background:transparent; border:1px solid var(--line); color:#E5E7EB}
 
@@ -67,7 +68,7 @@
     .card{padding:16px}
   }
 
-  /* ===== Modal ===== */
+  /* ===== Modal genérico ===== */
   .modal-backdrop{
     position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter: blur(4px);
     display:none; align-items:center; justify-content:center; z-index:60;
@@ -104,12 +105,18 @@
   .modal .flatpickr-day.today:not(.selected){
     border:1px solid #94a3b8;
   }
+
+  /* ===== PlanModal temas ===== */
+  .plan-theme-basic{--accent: var(--brand-white); --accentA: rgba(255,255,255,.35);}
+  .plan-theme-pro{--accent: var(--brand-blue); --accentA: rgba(21,112,239,.35);}
+  .plan-theme-max{--accent: var(--brand-green); --accentA: rgba(22,163,74,.35);}
+  .plan-modal .header-accent{border:2px solid var(--accent); border-radius:14px; padding:10px 14px; box-shadow:0 0 0 2px var(--accent), 0 0 18px 4px var(--accentA);}
 </style>
 </head>
 <body>
   <header>
     <div class="container nav">
-      <div class="brand">
+      <div class="brand" id="brandHome">
         <img src="assets/logo-retailhub.png" alt="Retail Hub logo">
         <span>Retail Hub</span>
       </div>
@@ -153,18 +160,19 @@
     <section id="planes" class="container">
       <div class="reveal"><h2>Planes</h2></div>
       <div class="grid3 pricing">
-        <article class="card reveal glow" style="--accent: var(--brand-white); --accentA: rgba(255,255,255,.35); border:2px solid var(--accent)">
+        <article class="card reveal glow plan-card plan-theme-basic" data-plan="basic" style="--accent: var(--brand-white); --accentA: rgba(255,255,255,.35); border:2px solid var(--accent)">
           <span class="pill">Básico</span>
           <h3>Organiza y estandariza</h3>
           <p class="price">Entra con orden</p>
-          <p class="tag">Procesos esenciales y bases sólidas.</p>
+          <p class="tag">(Pago por proyecto)</p>
           <ul class="list-simple">
             <li>Checklist de operación</li>
             <li>Estandarización de exhibiciones</li>
             <li>Controles básicos de inventario</li>
           </ul>
+          <div style="margin-top:12px"><button class="btn btn-primary plan-btn" data-plan="basic">Ver plan</button></div>
         </article>
-        <article class="card reveal glow" style="--accent: var(--brand-blue); --accentA: rgba(21,112,239,.35); border:2px solid var(--accent)">
+        <article class="card reveal glow plan-card plan-theme-pro" data-plan="pro" style="--accent: var(--brand-blue); --accentA: rgba(21,112,239,.35); border:2px solid var(--accent)">
           <span class="pill">Pro</span>
           <h3>Optimiza y reduce pérdidas</h3>
           <p class="price">Acompañamiento mensual</p>
@@ -174,8 +182,9 @@
             <li>Indicadores operativos básicos</li>
             <li>Formación de líderes multifuncionales</li>
           </ul>
+          <div style="margin-top:12px"><button class="btn btn-primary plan-btn" data-plan="pro">Ver plan</button></div>
         </article>
-        <article class="card reveal glow" style="--accent: var(--brand-green); --accentA: rgba(22,163,74,.35); border:2px solid var(--accent)">
+        <article class="card reveal glow plan-card plan-theme-max" data-plan="max" style="--accent: var(--brand-green); --accentA: rgba(22,163,74,.35); border:2px solid var(--accent)">
           <span class="pill">Max</span>
           <h3>Escala con estrategia</h3>
           <p class="price">KPIs + capacitación continua</p>
@@ -185,6 +194,7 @@
             <li>Liderazgo y manejo de equipos</li>
             <li>Programa de capacitación mensual</li>
           </ul>
+          <div style="margin-top:12px"><button class="btn btn-primary plan-btn" data-plan="max">Ver plan</button></div>
         </article>
       </div>
     </section>
@@ -257,7 +267,7 @@
     <!-- CONTACTO -->
     <section id="contacto" class="container">
       <div class="reveal"><h2>Contacto</h2></div>
-		<div class="card reveal">
+      <div class="card reveal">
         <p>Cuéntanos de tu tienda y te proponemos un plan claro.</p>
         <p>Correo: <a href="mailto:Retailoc.soporte@gmail.com">Retailoc.soporte@gmail.com</a></p>
         <p>WhatsApp: <a target="_blank" rel="noopener" href="https://wa.me/525553815006?text=Hola%20Retail%20Hub%2C%20quiero%20una%20asesor%C3%ADa">+52 55 5381 5006</a></p>
@@ -273,6 +283,7 @@
         <button class="close" id="closeModalBtn">Cerrar ✕</button>
       </header>
 
+      <!-- Volvemos a envío NATIVO (POST) para evitar CORS -->
       <form id="form-asesoria" action="https://script.google.com/macros/s/AKfycbwEWV7tsGZypGaGaaQw4TZzMx9jd3tLEFN9MOgoXwfpPMh1nUCiUsDHUMxV2QL14WOO/exec" method="POST">
         <!-- Datos de contacto -->
         <div class="card" style="margin-bottom:12px">
@@ -296,6 +307,9 @@
             </div>
           </div>
         </div>
+
+        <!-- Preferencia de plan (si llega desde PlanModal) -->
+        <input type="hidden" name="plan_preferido" id="planPreferido" value="">
 
         <!-- Selección rubro/servicio -->
         <div class="card" style="margin-bottom:12px">
@@ -339,6 +353,38 @@
     </div>
   </div>
 
+  <!-- ===== PlanModal ===== -->
+  <div class="modal-backdrop" id="planModal">
+    <div class="modal plan-modal" id="planModalBox" role="dialog" aria-modal="true" aria-labelledby="planModalTitle">
+      <header style="display:flex; align-items:center; gap:10px;">
+        <h3 id="planModalTitle">Detalle del plan</h3>
+        <button class="close" id="closePlanModalBtn">Cerrar ✕</button>
+      </header>
+
+      <div class="card header-accent" style="margin-bottom:14px">
+        <h4 id="planName" style="margin:0 0 4px 0">Plan</h4>
+        <p id="planShort" style="margin:0; color:#A3AED0">Descripción corta</p>
+      </div>
+
+      <div class="row">
+        <div>
+          <h4>Precio</h4>
+          <p id="planPrice" class="pricing price" style="margin:0">—</p>
+          <p id="planLegend" class="tag">(Pago por proyecto)</p>
+        </div>
+        <div>
+          <h4>Incluye</h4>
+          <ul id="planList" class="list-simple" style="margin-top:6px"></ul>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; margin-top:14px">
+        <button class="btn btn-primary" id="planCtaBtn">Quiero este plan</button>
+        <a href="#planes" class="btn btn-ghost" id="planBack">Ver otros planes</a>
+      </div>
+    </div>
+  </div>
+
   <footer>
     <div class="container" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap">
       <p>© <span id="year"></span> Retail Hub.</p>
@@ -352,18 +398,24 @@
   const obs = new IntersectionObserver((entries)=>{entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('visible'); obs.unobserve(e.target) }})},{threshold:.12});
   document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
 
-  // ----- Modal -----
-  const modal = document.getElementById('modal');
-  const openModal = ()=> modal.classList.add('active');
-  const closeModal = ()=> modal.classList.remove('active');
-  document.getElementById('openModalBtn').addEventListener('click', (e)=>{e.preventDefault(); openModal();});
-  document.getElementById('openModalBtn2').addEventListener('click', (e)=>{e.preventDefault(); openModal();});
-  // FIX: este botón puede no existir; antes rompía el JS y ya no corría la lógica de rubros/servicios
-  const openModalBtn3 = document.getElementById('openModalBtn3');
-  if(openModalBtn3){ openModalBtn3.addEventListener('click', (e)=>{e.preventDefault(); openModal();}); }
-  document.getElementById('closeModalBtn').addEventListener('click', closeModal);
-  modal.addEventListener('click', (e)=>{ if(e.target===modal) closeModal(); });
-  window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
+  // ===== Utilidad modal genérico =====
+  function setupModal(backdropId, openers, closerId){
+    const modal = document.getElementById(backdropId);
+    const open = ()=> modal.classList.add('active');
+    const close = ()=> modal.classList.remove('active');
+    openers.forEach(id=>{
+      const b = document.getElementById(id);
+      if(b){ b.addEventListener('click', (e)=>{ e.preventDefault(); open(); }); }
+    });
+    const closer = document.getElementById(closerId);
+    if(closer){ closer.addEventListener('click', close); }
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) close(); });
+    window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') close(); });
+    return {open, close, modal};
+  }
+
+  // ----- Modal Asesoría -----
+  const asesor = setupModal('modal', ['openModalBtn','openModalBtn2','openModalBtn3'], 'closeModalBtn');
 
   // ----- Config rubros/servicios/preguntas -----
   const CONFIG = {
@@ -552,27 +604,84 @@
     preguntasCard.style.display = 'block';
   });
 
-  // Envío por AJAX (Apps Script)
-  const form = document.getElementById('form-asesoria');
-  form.addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const fd = new FormData(form);
-    fd.append('_subject','Nueva solicitud de asesoría — Retail Hub');
-    fd.append('_replyto', fd.get('contacto_email') || '');
-    try{
-      const resp = await fetch(form.action,{method:'POST', body:fd});
-      if(resp.ok){
-        alert('¡Gracias! Tu solicitud fue enviada. Te contactaremos por correo.');
-        form.reset(); contPreg.innerHTML=''; preguntasCard.style.display='none';
-        document.getElementById('closeModalBtn').click();
-      }else{
-        const t = await resp.text();
-        alert('Hubo un problema al enviar. ' + t);
-      }
-    }catch(err){
-      console.error(err);
-      alert('No se pudo enviar. Revisa tu conexión e inténtalo otra vez.');
+  // ===== PlanModal =====
+  const PLAN_CTA_TEXT = 'Solicitar plan';
+  const PLAN_DETAIL = {
+    basic: {
+      name:'Básico',
+      short:'Organiza y estandariza',
+      price:'Pago por proyecto',
+      legend:'(Pago por proyecto)',
+      theme:'plan-theme-basic',
+      items:[
+        'Checklist de operación',
+        'Estandarización de exhibiciones',
+        'Controles básicos de inventario'
+      ]
+    },
+    pro: {
+      name:'Pro',
+      short:'Optimiza y reduce pérdidas',
+      price:'Acompañamiento mensual',
+      legend:'Servicio continuo',
+      theme:'plan-theme-pro',
+      items:[
+        'Conteos cíclicos y rotación',
+        'Indicadores operativos básicos',
+        'Formación de líderes multifuncionales'
+      ]
+    },
+    max: {
+      name:'Max',
+      short:'Escala con estrategia',
+      price:'KPIs + capacitación continua',
+      legend:'Consultoría estratégica',
+      theme:'plan-theme-max',
+      items:[
+        'KPIs y dashboard de gestión',
+        'Liderazgo y manejo de equipos',
+        'Programa de capacitación mensual'
+      ]
     }
+  };
+
+  const planModal = setupModal('planModal', [], 'closePlanModalBtn');
+  const planBox = document.getElementById('planModalBox');
+  const planName = document.getElementById('planName');
+  const planShort = document.getElementById('planShort');
+  const planPrice = document.getElementById('planPrice');
+  const planLegend = document.getElementById('planLegend');
+  const planList = document.getElementById('planList');
+  const planCtaBtn = document.getElementById('planCtaBtn');
+  const planPreferido = document.getElementById('planPreferido');
+
+  document.querySelectorAll('.plan-btn').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      const key = btn.dataset.plan;
+      const d = PLAN_DETAIL[key];
+      if(!d) return;
+      // set theme
+      planBox.classList.remove('plan-theme-basic','plan-theme-pro','plan-theme-max');
+      planBox.classList.add(d.theme);
+      // content
+      planName.textContent = d.name;
+      planShort.textContent = d.short;
+      planPrice.textContent = d.price;
+      planLegend.textContent = d.legend || '';
+      planList.innerHTML = '';
+      d.items.forEach(it=>{
+        const li = document.createElement('li'); li.textContent = it; planList.appendChild(li);
+      });
+      planCtaBtn.textContent = PLAN_CTA_TEXT;
+      planModal.open();
+      // CTA -> abre asesoría y prellena plan preferido
+      planCtaBtn.onclick = ()=>{
+        planPreferido.value = d.name;
+        planModal.close();
+        asesor.open();
+      };
+    });
   });
 </script>
 </body>
