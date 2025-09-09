@@ -10,9 +10,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
 
-<!-- Flatpickr CSS -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-
 <style>
   :root{
     --brand-blue:#1570EF; --brand-green:#16A34A; --brand-white:#FFFFFF;
@@ -31,9 +28,11 @@
 
   header{position:sticky; top:0; z-index:40; background:rgba(11,18,32,.65); backdrop-filter: blur(8px) saturate(160%); border-bottom:1px solid var(--line)}
   .nav{display:flex; align-items:center; justify-content:space-between; padding:14px 0}
-  .brand{display:flex; align-items:center; gap:12px; font-weight:800; cursor:pointer}
+  .brand{display:flex; align-items:center; gap:12px; font-weight:800}
   .brand img{width:36px; height:36px; border-radius:8px}
-  .nav a{border:1px solid var(--line); padding:8px 12px; border-radius:10px; color:#E5E7EB; text-decoration:none}
+  /* Mobile option A: horizontal scrollable nav */
+  header nav{display:flex; gap:8px; overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; scrollbar-width:none}
+  header nav::-webkit-scrollbar{display:none}
 
   main section{padding:54px 0}
   .hero{display:grid; grid-template-columns:1.2fr 1fr; gap:28px; padding:60px 0 36px}
@@ -45,20 +44,8 @@
   .btn-primary{background:linear-gradient(135deg,var(--brand-blue),#6366F1); color:#0B1220; box-shadow:var(--shadow)}
   .btn-ghost{background:transparent; border:1px solid var(--line); color:#E5E7EB}
 
-  .card{background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
-        border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow);
-        transition: box-shadow .25s ease, border-color .25s ease, transform .2s ease;}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)); border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); transition: box-shadow .25s ease, border-color .25s ease, transform .2s ease;}
   .card.glow:hover,.card.glow:focus-within{border-color: var(--accent); box-shadow:0 0 0 2px var(--accent), 0 0 20px 4px var(--accentA); transform: translateY(-2px);}
-
-  /* ===== Plan Modal Themes ===== */
-  #planModal .modal { width:min(420px,92vw); max-height:90vh; overflow-y:auto; background:var(--card);
-    border:2px solid var(--accent); border-radius:20px; box-shadow:0 0 0 2px var(--accent), 0 0 20px 4px var(--accentA), var(--shadow); padding:22px; }
-  #planContent{ background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)); border-radius: calc(var(--radius) - 4px); padding:18px; }
-  #planModal.plan--Basico { --accent: var(--brand-white); --accentA: rgba(255,255,255,.35); }
-  #planModal.plan--Pro    { --accent: var(--brand-blue);  --accentA: rgba(21,112,239,.35); }
-  #planModal.plan--Max    { --accent: var(--brand-green); --accentA: rgba(22,163,74,.35); }
-  #planCtaBtn { margin-top:14px; }
-
   .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:18px}
   .pill{display:inline-flex; padding:4px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#A3AED0}
   .pricing .price{font-size:28px; font-weight:800}
@@ -72,16 +59,31 @@
   html{scroll-behavior: smooth;}
   @media (max-width:980px){ .hero{grid-template-columns:1fr} .grid3{grid-template-columns:1fr} }
 
+  /* Extra mobile polish */
+  @media (max-width:720px){
+    .brand img{width:30px; height:30px}
+    .nav{padding:10px 0}
+    main section{padding:42px 0}
+    .card{padding:16px}
+  }
+
   /* ===== Modal ===== */
-  .modal-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter: blur(4px);
-    display:none; align-items:center; justify-content:center; z-index:60; }
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter: blur(4px);
+    display:none; align-items:center; justify-content:center; z-index:60;
+  }
   .modal-backdrop.active{display:flex}
-  .modal{ width:min(760px, 92vw); max-height:86vh; overflow:auto; background:var(--card); border:1px solid var(--line);
-    border-radius:20px; box-shadow:var(--shadow); padding:22px; }
+  .modal{
+    width:min(760px, 92vw); max-height:86vh; overflow:auto;
+    background:var(--card); border:1px solid var(--line); border-radius:20px; box-shadow:var(--shadow);
+    padding:22px;
+  }
   .modal header{position:sticky; top:0; background:transparent; border:none; padding:0 0 12px 0}
   .modal h3{margin:0}
-  .modal .close{ margin-left:auto; background:transparent; border:1px solid var(--line); color:#E5E7EB;
-    border-radius:10px; padding:6px 10px; cursor:pointer; }
+  .modal .close{
+    margin-left:auto; background:transparent; border:1px solid var(--line); color:#E5E7EB;
+    border-radius:10px; padding:6px 10px; cursor:pointer;
+  }
 
   /* Campos form modal */
   form{display:grid; gap:14px}
@@ -95,70 +97,19 @@
   .helper{font-size:12px; color:#A3AED0}
   .btn-submit{background:linear-gradient(135deg,var(--brand-green),#22d3ee); color:#0B1220; font-weight:800}
 
-  /* ===== Flatpickr dentro del modal de Agenda ===== */
-  #agendaModal .flatpickr-calendar{ z-index:80 !important; }
-
-  /* ===== Input group (fecha + hora juntas) ===== */
-  .input-group{ display:flex; align-items:stretch; width:100%; max-width:520px; }
-  .input-group .input-lite.left{
-    border-top-right-radius:0; border-bottom-right-radius:0; border-right:0;
+  /* Paso 3: Mejor contraste en días disponibles del calendario (si Flatpickr está presente) */
+  .modal .flatpickr-day:not(.flatpickr-disabled):not(.prevMonthDay):not(.nextMonthDay){
+    color:#F8FAFC; font-weight:600;
   }
-  .input-group .select-lite.right{
-    border-top-left-radius:0; border-bottom-left-radius:0;
+  .modal .flatpickr-day.today:not(.selected){
+    border:1px solid #94a3b8;
   }
-  .input-lite, .select-lite{
-    background:#0F1626; color:#E5E7EB;
-    border:1px solid var(--line); height:42px;
-    padding:10px 12px; border-radius:10px;
-  }
-  .input-lite:focus, .select-lite:focus{
-    outline:none; border-color:#1570EF; box-shadow:0 0 0 2px rgba(21,112,239,.35);
-  }
-  .select-lite{ appearance:none; }
-
-  /* Icono calendario (oscuro) en el input de fecha */
-  #agendaDate.input-lite{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23E5E7EB' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'/%3E%3Cline x1='16' y1='2' x2='16' y2='6'/%3E%3Cline x1='8' y1='2' x2='8' y2='6'/%3E%3Cline x1='3' y1='10' x2='21' y2='10'/%3E%3C/svg%3E");
-    background-repeat:no-repeat; background-position:right 10px center; padding-right:36px;
-  }
-
-  /* Calendario estilo Outlook Dark */
-  #agendaModal .flatpickr-calendar{
-    background:#1E293B; border:1px solid #334155; border-radius:12px;
-    box-shadow:0 10px 28px rgba(0,0,0,.55); color:#F1F5F9;
-  }
-  #agendaModal .flatpickr-months{ background:#1E293B; border-bottom:1px solid #334155; }
-  #agendaModal .flatpickr-current-month .cur-month,
-  #agendaModal .flatpickr-current-month .numInputWrapper input{ font-weight:700; color:#F1F5F9; }
-  #agendaModal .flatpickr-weekdays, #agendaModal .flatpickr-days{ background:#1E293B; color:#E2E8F0; }
-  #agendaModal .flatpickr-day{ border-radius:8px; }
-  #agendaModal .flatpickr-day:hover{ background:#334155; color:#fff; }
-  #agendaModal .flatpickr-day.selected{ background:#1570EF; border-color:#1570EF; color:#fff; }
-  #agendaModal .flatpickr-day.flatpickr-disabled,
-  #agendaModal .flatpickr-day.prevMonthDay, #agendaModal .flatpickr-day.nextMonthDay{ color:#64748B; }
-
-  /* Dropdown de horas oscuro */
-  #agendaTime.select-lite option{ background:#0F1626; color:#E5E7EB; }
-
-  /* Responsive: apilar si es estrecho */
-  @media (max-width:560px){
-    .input-group{ flex-direction:column; gap:8px; max-width:100%; }
-    .input-group .input-lite.left{ border-right:1px solid var(--line); border-radius:10px; }
-    .input-group .select-lite.right{ border-radius:10px; }
-  }
-
-  /* sr-only helper (para accesibilidad) */
-  .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 </style>
-
-<!-- Flatpickr JS + locale ES -->
-<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/es.js"></script>
 </head>
 <body>
   <header>
     <div class="container nav">
-      <div class="brand" id="brandHome">
+      <div class="brand">
         <img src="assets/logo-retailhub.png" alt="Retail Hub logo">
         <span>Retail Hub</span>
       </div>
@@ -167,6 +118,7 @@
         <a href="#planes">Planes</a>
         <a href="#servicios">Servicios</a>
         <a href="#capacitacion">Capacitación</a>
+        <a href="#" id="openModalBtn">Asesoría</a>
         <a href="#contacto">Contacto</a>
       </nav>
     </div>
@@ -174,13 +126,13 @@
 
   <main>
     <!-- HERO -->
-    <section id="inicio" class="container hero">
+    <section class="container hero">
       <div class="reveal">
         <span class="badge">Consultoría • Operación • Capacitación</span>
         <h1>El centro de soluciones para tu negocio</h1>
         <p class="lead">Ordenamos, optimizamos y escalamos operaciones retail con estrategias prácticas y personalizadas.</p>
         <div class="cta">
-          <a class="btn btn-primary" href="#" id="openModalBtn2">Pedir cotización</a>
+          <a class="btn btn-primary" href="#" id="openModalBtn2">Quiero una asesoría</a>
           <a class="btn btn-ghost" href="#planes">Ver planes</a>
         </div>
       </div>
@@ -201,7 +153,7 @@
     <section id="planes" class="container">
       <div class="reveal"><h2>Planes</h2></div>
       <div class="grid3 pricing">
-        <article id="planBasico" data-plan="Básico" class="card reveal glow" style="--accent: var(--brand-white); --accentA: rgba(255,255,255,.35); border:2px solid var(--accent)">
+        <article class="card reveal glow" style="--accent: var(--brand-white); --accentA: rgba(255,255,255,.35); border:2px solid var(--accent)">
           <span class="pill">Básico</span>
           <h3>Organiza y estandariza</h3>
           <p class="price">Entra con orden</p>
@@ -212,7 +164,7 @@
             <li>Controles básicos de inventario</li>
           </ul>
         </article>
-        <article id="planPro" data-plan="Pro" class="card reveal glow" style="--accent: var(--brand-blue); --accentA: rgba(21,112,239,.35); border:2px solid var(--accent)">
+        <article class="card reveal glow" style="--accent: var(--brand-blue); --accentA: rgba(21,112,239,.35); border:2px solid var(--accent)">
           <span class="pill">Pro</span>
           <h3>Optimiza y reduce pérdidas</h3>
           <p class="price">Acompañamiento mensual</p>
@@ -223,7 +175,7 @@
             <li>Formación de líderes multifuncionales</li>
           </ul>
         </article>
-        <article id="planMax" data-plan="Max" class="card reveal glow" style="--accent: var(--brand-green); --accentA: rgba(22,163,74,.35); border:2px solid var(--accent)">
+        <article class="card reveal glow" style="--accent: var(--brand-green); --accentA: rgba(22,163,74,.35); border:2px solid var(--accent)">
           <span class="pill">Max</span>
           <h3>Escala con estrategia</h3>
           <p class="price">KPIs + capacitación continua</p>
@@ -305,23 +257,24 @@
     <!-- CONTACTO -->
     <section id="contacto" class="container">
       <div class="reveal"><h2>Contacto</h2></div>
-      <div class="card reveal">
+		<div class="card reveal">
         <p>Cuéntanos de tu tienda y te proponemos un plan claro.</p>
         <p>Correo: <a href="mailto:Retailoc.soporte@gmail.com">Retailoc.soporte@gmail.com</a></p>
-        <p>WhatsApp: <a target="_blank" rel="noopener" href="https://wa.me/525553815006">+52 55 5381 5006</a></p>
+        <p>WhatsApp: <a target="_blank" rel="noopener" href="https://wa.me/525553815006?text=Hola%20Retail%20Hub%2C%20quiero%20una%20asesor%C3%ADa">+52 55 5381 5006</a></p>
       </div>
     </section>
   </main>
 
-  <!-- ===== Modal de Cotización ===== -->
+  <!-- ===== Modal de Asesoría (Apps Script) ===== -->
   <div class="modal-backdrop" id="modal">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <header style="display:flex; align-items:center; gap:10px;">
-        <h3 id="modalTitle">Solicitar cotización</h3>
-        <button type="button" class="close" id="closeModalBtn">Cerrar ✕</button>
+        <h3 id="modalTitle">Solicitar asesoría</h3>
+        <button class="close" id="closeModalBtn">Cerrar ✕</button>
       </header>
 
-      <form id="form-asesoria" action="https://script.google.com/macros/s/AKfycbyGrrb7CDFavz_u-pX4y4ptRfcVP-yNt3Guibp4TLXslMmnDMF-itvWnxIEJ8c5_gJc/exec" method="POST">
+      <form id="form-asesoria" action="https://script.google.com/macros/s/AKfycbwEWV7tsGZypGaGaaQw4TZzMx9jd3tLEFN9MOgoXwfpPMh1nUCiUsDHUMxV2QL14WOO/exec" method="POST">
+        <!-- Datos de contacto -->
         <div class="card" style="margin-bottom:12px">
           <h4>Datos de contacto</h4>
           <div class="row">
@@ -344,6 +297,7 @@
           </div>
         </div>
 
+        <!-- Selección rubro/servicio -->
         <div class="card" style="margin-bottom:12px">
           <h4>¿Qué necesitas?</h4>
           <div class="row">
@@ -367,6 +321,7 @@
           </div>
         </div>
 
+        <!-- Preguntas dinámicas -->
         <div id="preguntas" class="card" style="display:none; margin-bottom:12px">
           <h4>Cuéntanos un poco más</h4>
           <div id="contenedor-preguntas"></div>
@@ -377,93 +332,10 @@
           <textarea name="mensaje" placeholder="Detalles, urgencia o fechas deseadas"></textarea>
         </div>
 
-        <input type="hidden" name="_subject" value="Nueva solicitud de cotización — Retail Hub" />
+        <input type="hidden" name="_subject" value="Nueva solicitud de asesoría — Retail Hub" />
         <button class="btn btn-submit" type="submit">Enviar solicitud</button>
         <p class="helper">Te contactaremos por correo lo antes posible.</p>
       </form>
-    </div>
-  </div>
-
-  <!-- ===== Modal de Plan ===== -->
-  <div class="modal-backdrop" id="planModal">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="planModalTitle">
-      <header style="display:flex; align-items:center; gap:10px;">
-        <h3 id="planModalTitle">Detalle del plan</h3>
-        <button type="button" class="close" id="closePlanModalBtn">Cerrar ✕</button>
-      </header>
-
-      <div id="planContent" class="card" style="margin-bottom:12px"></div>
-      <button class="btn btn-submit" id="planCtaBtn" type="button"></button>
-      <p class="helper">Te contactaremos para coordinar la contratación.</p>
-    </div>
-  </div>
-
-  <!-- ===== Modal de Agenda ===== -->
-  <div class="modal-backdrop" id="agendaModal">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="agendaTitle">
-      <header style="display:flex; align-items:center; gap:10px;">
-        <h3 id="agendaTitle">Agendar cita</h3>
-        <button type="button" class="close" id="closeAgendaBtn">Cerrar ✕</button>
-      </header>
-
-      <div class="card" style="margin-bottom:12px">
-        <h4>Elige fecha y hora</h4>
-        <div>
-          <label class="sr-only">Fecha y hora</label>
-          <div class="input-group" id="agendaDateTimeGroup">
-            <input id="agendaDate" class="input-lite left" placeholder="dd/mm/aaaa" required readonly />
-            <select id="agendaTime" class="select-lite right" required>
-              <option value="">Hora…</option>
-              <!-- se llena por JS -->
-            </select>
-          </div>
-        </div>
-
-        <h4 style="margin-top:14px">Tus datos</h4>
-        <div class="row">
-          <div>
-            <label>Nombre</label>
-            <input id="agendaNombre" placeholder="Nombre y apellidos" required />
-          </div>
-          <div>
-            <label>Teléfono</label>
-            <input id="agendaTel" placeholder="+52 ..." required />
-          </div>
-        </div>
-
-        <h4 style="margin-top:14px">Dirección</h4>
-        <div class="row">
-          <div style="grid-column: 1 / -1">
-            <label>Calle</label>
-            <input id="addrCalle" placeholder="Calle" required />
-          </div>
-          <div>
-            <label>Número exterior</label>
-            <input id="addrNumExt" placeholder="Ej. 123" required />
-          </div>
-          <div>
-            <label>Número interior (opcional)</label>
-            <input id="addrNumInt" placeholder="Depto / Interior" />
-          </div>
-          <div>
-            <label>Colonia</label>
-            <input id="addrColonia" required />
-          </div>
-          <div>
-            <label>Código postal</label>
-            <input id="addrCP" required />
-          </div>
-          <div>
-            <label>Estado</label>
-            <input id="addrEstado" required />
-          </div>
-        </div>
-
-        <p class="helper" id="agendaPlanHelper" style="margin-top:8px"></p>
-      </div>
-
-      <button class="btn btn-submit" id="agendaConfirmBtn" type="button">Confirmar cita</button>
-      <p class="helper">Al confirmar, te contactaremos para coordinar.</p>
     </div>
   </div>
 
@@ -474,264 +346,234 @@
     </div>
   </footer>
 
-<!-- === JS START: RetailHub === -->
 <script>
-const ENDPOINT = "https://script.google.com/macros/s/AKfycbyGrrb7CDFavz_u-pX4y4ptRfcVP-yNt3Guibp4TLXslMmnDMF-itvWnxIEJ8c5_gJc/exec";
-let PLAN_CTA_TEXT = 'Agendar Cita';
+  // Año dinámico + reveal
+  document.getElementById('year').textContent = new Date().getFullYear();
+  const obs = new IntersectionObserver((entries)=>{entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('visible'); obs.unobserve(e.target) }})},{threshold:.12});
+  document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
 
-// Año + reveals
-document.getElementById('year').textContent = new Date().getFullYear();
-const obs = new IntersectionObserver((entries)=>{
-  entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('visible'); obs.unobserve(e.target) }})
-},{threshold:.12});
-document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
+  // ----- Modal -----
+  const modal = document.getElementById('modal');
+  const openModal = ()=> modal.classList.add('active');
+  const closeModal = ()=> modal.classList.remove('active');
+  document.getElementById('openModalBtn').addEventListener('click', (e)=>{e.preventDefault(); openModal();});
+  document.getElementById('openModalBtn2').addEventListener('click', (e)=>{e.preventDefault(); openModal();});
+  // FIX: este botón puede no existir; antes rompía el JS y ya no corría la lógica de rubros/servicios
+  const openModalBtn3 = document.getElementById('openModalBtn3');
+  if(openModalBtn3){ openModalBtn3.addEventListener('click', (e)=>{e.preventDefault(); openModal();}); }
+  document.getElementById('closeModalBtn').addEventListener('click', closeModal);
+  modal.addEventListener('click', (e)=>{ if(e.target===modal) closeModal(); });
+  window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
 
-// Helpers modal cotización
-const modal = document.getElementById('modal');
-const openModal = ()=> modal.classList.add('active');
-const closeModal = ()=> modal.classList.remove('active');
-const byId = (id)=> document.getElementById(id);
-const safeOn = (id, ev, fn)=>{ const el = byId(id); if(el) el.addEventListener(ev, fn); };
+  // ----- Config rubros/servicios/preguntas -----
+  const CONFIG = {
+    "Estrategias": {
+      "Análisis de rentabilidad": [
+        "¿Conoce su utilidad neta actual? (sí/no)",
+        "¿Cuál considera que es su mayor gasto operativo?",
+        "Objetivo del análisis (reducir gastos, mejorar márgenes, planificar crecimiento)"
+      ],
+      "Análisis de ventas": [
+        "¿Registra ventas diario/semanal? (sí/no)",
+        "¿Qué tan estables son sus ventas mensuales? (muy variables / estables)",
+        "¿Qué desea mejorar? (ticket promedio, número de clientes, frecuencia)"
+      ],
+      "Nivel de experiencia del cliente": [
+        "¿Mide la satisfacción del cliente? (sí/no)",
+        "¿Cómo obtiene retroalimentación? (comentarios, encuestas, ninguno)",
+        "¿Qué desea mejorar? (tiempo de atención, calidad, fidelidad)"
+      ]
+    },
+    "Inventarios": {
+      "Diseño de almacenes": [
+        "¿Cuenta con un espacio definido de almacén? (sí/no)",
+        "Principal problema (falta de espacio, desorden, pérdidas)",
+        "Metros cuadrados aproximados del área"
+      ],
+      "Creación de base de datos": [
+        "¿Tiene sistema digital de inventarios? (Excel, POS, ninguno)",
+        "Número aproximado de productos/SKUs",
+        "¿Requiere importación de datos actuales? (sí/no)"
+      ],
+      "Inventarios generales": [
+        "¿Cada cuánto realiza conteos generales?",
+        "Mayor problema (faltantes, mermas, exceso de stock)",
+        "¿Cuenta con personal para los conteos? (sí/no)"
+      ]
+    },
+    "Soporte Operativo": {
+      "Mercadeo de productos": [
+        "Métodos actuales de exhibición/promoción",
+        "Objetivo principal (rotación, destacar nuevas líneas, incrementar ventas)",
+        "¿Cuenta con calendario/promociones vigentes? (sí/no)"
+      ],
+      "Servicio al cliente": [
+        "¿Personal capacitado en servicio? (sí/no)",
+        "Aspecto por mejorar (tiempo de atención, resolución, trato)",
+        "¿Cuenta con protocolos escritos? (sí/no)"
+      ],
+      "Administración de tienda": [
+        "¿Lleva controles diarios de caja, ventas y gastos? (sí/no)",
+        "Reto principal (organización, personal, control de gastos)",
+        "Sistema que usa hoy (manual, Excel, POS)"
+      ]
+    },
+    "Soporte Ventas": {
+      "Mystery Shoper": [
+        "¿Ha usado mystery shopper antes? (sí/no)",
+        "¿Qué desea evaluar? (atención, rapidez, conocimiento)",
+        "Número de sucursales a evaluar"
+      ],
+      "Reporte Basket Market": [
+        "¿Analiza productos que se venden juntos? (sí/no)",
+        "Objetivo (combos, promociones, layout)",
+        "¿Cuenta con histórico de tickets? (sí/no)"
+      ],
+      "Reporte Pareto": [
+        "¿Conoce su top 20% de productos? (sí/no)",
+        "Objetivo (enfocar compras, reducir inventario lento, margen)",
+        "Período a analizar (mes actual, 3 meses, 12 meses)"
+      ],
+      "Planeación de la demanda": [
+        "¿Cuenta con histórico de ventas? (sí/no)",
+        "Objetivo (abastecimiento, reducir faltantes, flujo de caja)",
+        "Horizonte de planeación deseado (semanal, mensual, trimestral)"
+      ],
+      "Estrategias de venta": [
+        "¿Principal reto actual? (atraer, cerrar, fidelizar)",
+        "Canal principal (tienda física, online, ambos)",
+        "Objetivo de la estrategia (más clientes, mayor ticket, recurrencia)"
+      ]
+    },
+    "Capacitación": {
+      "Atención a clientes": [
+        "¿Cuántas personas requieren capacitación?",
+        "Modalidad preferida (presencial, en línea, mixta)",
+        "Objetivo (satisfacción, fidelización, reducir quejas)"
+      ],
+      "Manejo de objeciones": [
+        "¿El equipo enfrenta objeciones frecuentes? (sí/no)",
+        "Objetivo (cerrar más ventas, confianza del equipo)",
+        "Experiencia del equipo (baja, media, alta)"
+      ],
+      "Estandarización de exhibiciones": [
+        "¿Cuentan con lineamientos de exhibición? (sí/no)",
+        "Reto principal (orden, limpieza, reposición, señalización)",
+        "Frecuencia de cambios de exhibición"
+      ],
+      "Diseño de controles básicos": [
+        "¿Qué controles necesita? (entradas/salidas, caja, mermas)",
+        "Herramienta actual (manual, Excel, sistema)",
+        "Objetivo (menos errores, visibilidad, auditoría)"
+      ],
+      "Liderez y multifuncionales": [
+        "Número de líderes/encargados",
+        "Competencias a desarrollar (delegación, supervisión, rotación)",
+        "Formato deseado (taller, coaching, programa)"
+      ],
+      "Manejo de indicadores operativos": [
+        "¿Indicadores que ya usan? (ventas, rotación, mermas)",
+        "Nivel requerido (básico, intermedio, avanzado)",
+        "Objetivo (toma de decisiones, seguimiento, reportes)"
+      ],
+      "Liderazgo estratégico": [
+        "Etapa del negocio (arranque, crecimiento, madurez)",
+        "Reto principal (motivación, decisiones, expansión)",
+        "Formato (curso, workshop, programa mensual)"
+      ],
+      "Manejo de equipos": [
+        "Tamaño del equipo",
+        "Reto (disciplina, coordinación, productividad)",
+        "Objetivo (clima laboral, eficiencia, cumplimiento)"
+      ],
+      "Lineamientos de marca": [
+        "¿Existen estándares de marca? (sí/no)",
+        "Áreas a cubrir (uniforme, atención, exhibición, comunicación)",
+        "Objetivo (uniformidad, identidad, presentación)"
+      ]
+    }
+  };
 
-safeOn('openModalBtn2','click', (e)=>{ e.preventDefault(); openModal(); });
-safeOn('openModalBtn3','click', (e)=>{ e.preventDefault(); openModal(); });
-safeOn('closeModalBtn','click', (e)=>{ e.preventDefault(); closeModal(); });
-safeOn('brandHome', 'click', (e)=>{
-  e.preventDefault();
-  const home = document.getElementById('inicio');
-  if (home) home.scrollIntoView({ behavior: 'smooth' });
-  else window.scrollTo({ top: 0, behavior: 'smooth' });
-});
-modal.addEventListener('click', (e)=>{ if(e.target===modal) closeModal(); });
-window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
+  // Selects y contenedores
+  const rubroSel = document.getElementById('rubro');
+  const servicioSel = document.getElementById('servicio');
+  const preguntasCard = document.getElementById('preguntas');
+  const contPreg = document.getElementById('contenedor-preguntas');
 
-// === SECTION: AGENDA (Fecha sola + Select de hora; L–V, mañana +15, slots 9–13) ===
-const agendaModal   = document.getElementById('agendaModal');
-const agendaConfirm = document.getElementById('agendaConfirmBtn');
-const agendaHelper  = document.getElementById('agendaPlanHelper');
+  // Cargar servicios según rubro
+  rubroSel && rubroSel.addEventListener('change', () => {
+    servicioSel.innerHTML = '<option value="">Selecciona…</option>';
+    servicioSel.disabled = true;
+    contPreg.innerHTML = '';
+    preguntasCard.style.display = 'none';
+    const rubro = rubroSel.value;
+    if(!rubro || !CONFIG[rubro]) return;
+    Object.keys(CONFIG[rubro]).forEach(s => {
+      const opt = document.createElement('option'); opt.value = s; opt.textContent = s;
+      servicioSel.appendChild(opt);
+    });
+    servicioSel.disabled = false;
+  });
 
-// Dirección detallada
-const addrCalle   = document.getElementById('addrCalle');
-const addrNumExt  = document.getElementById('addrNumExt');
-const addrNumInt  = document.getElementById('addrNumInt');
-const addrColonia = document.getElementById('addrColonia');
-const addrCP      = document.getElementById('addrCP');
-const addrEstado  = document.getElementById('addrEstado');
+  // Mostrar preguntas del servicio — envía etiqueta + valor y q_count
+  servicioSel && servicioSel.addEventListener('change', () => {
+    contPreg.innerHTML = '';
+    const rubro = rubroSel.value, serv = servicioSel.value;
+    if(!rubro || !serv) { preguntasCard.style.display='none'; return; }
+    const preguntas = CONFIG[rubro][serv] || [];
 
-const openAgendaModal  = () => { initAgenda(); agendaModal.classList.add('active'); };
-const closeAgendaModal = () => agendaModal.classList.remove('active');
-document.getElementById('closeAgendaBtn')?.addEventListener('click', e=>{ e.preventDefault(); closeAgendaModal(); });
-agendaModal?.addEventListener('click', e=>{ if(e.target===agendaModal) closeAgendaModal(); });
+    preguntas.forEach((q, i) => {
+      const wrap = document.createElement('div'); wrap.style.marginBottom='10px';
 
-// Slots válidos 9–13
-const AGENDA_SLOTS = [9,10,11,12,13];
-let LAST_PLAN_PICKED = null;
-['planBasico','planPro','planMax'].forEach(id=>{
-  const el = document.getElementById(id);
-  if (el) el.addEventListener('click', ()=>{ LAST_PLAN_PICKED = el.dataset.plan || null; });
-});
+      const lab = document.createElement('label'); lab.textContent = q;
 
-// Utils fecha
-function isWeekend(d){ const wd=d.getDay(); return (wd===0||wd===6); }
-function nextWeekday(d){ const nd=new Date(d); while(isWeekend(nd)) nd.setDate(nd.getDate()+1); return nd; }
-function startOfDay(d){ return new Date(d.getFullYear(),d.getMonth(),d.getDate()); }
-function getMinDate(){ const t=new Date(); const s=new Date(t.getFullYear(),t.getMonth(),t.getDate()+1); return nextWeekday(s); }
-function getMaxDate(min){ const m=new Date(min); m.setDate(m.getDate()+15); while(isWeekend(m)) m.setDate(m.getDate()-1); return m; }
-function formatHour12(h24){ const ampm=(h24>=12)?'PM':'AM'; let h=h24%12; if(h===0)h=12; return `${String(h).padStart(2,'0')}:00 ${ampm}`; }
+      const inp = document.createElement('input'); // respuesta
+      inp.name = `q_${i+1}_value`;
+      inp.required = true;
 
-let fpDate; // flatpickr solo fecha
+      const hidden = document.createElement('input'); // texto de la pregunta
+      hidden.type = 'hidden';
+      hidden.name = `q_${i+1}_label`;
+      hidden.value = q;
 
-function initAgenda(){
-  const dateInput = document.getElementById('agendaDate');
-  const timeSel   = document.getElementById('agendaTime');
-  if (!dateInput || !timeSel) return;
+      wrap.appendChild(lab);
+      wrap.appendChild(inp);
+      wrap.appendChild(hidden);
+      contPreg.appendChild(wrap);
+    });
 
-  // Flatpickr solo FECHA
-  if (fpDate && typeof fpDate.destroy==='function') fpDate.destroy();
-  const minDate = getMinDate();
-  const maxDate = getMaxDate(minDate);
-  const modalShell = agendaModal?.querySelector('.modal') || undefined;
+    // Enviamos cuántas preguntas hay
+    const count = document.createElement('input');
+    count.type = 'hidden';
+    count.name = 'q_count';
+    count.value = preguntas.length;
+    contPreg.appendChild(count);
 
-  fpDate = flatpickr(dateInput, {
-    allowInput:false, disableMobile:true,
-    locale:(window.flatpickr?.l10ns?.es)||undefined,
-    enableTime:false, dateFormat:"d/m/Y",
-    minDate:startOfDay(minDate), maxDate:startOfDay(maxDate),
-    static:true, appendTo:modalShell,
-    disable:[(date)=>{ const d=date.getDay(); return (d===0||d===6); }],
-    onReady(_s,_str,inst){
-      const d=new Date(minDate.getFullYear(),minDate.getMonth(),minDate.getDate());
-      inst.setDate(d,true); dateInput.value = inst.formatDate(d,"d/m/Y");
+    preguntasCard.style.display = 'block';
+  });
+
+  // Envío por AJAX (Apps Script)
+  const form = document.getElementById('form-asesoria');
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(form);
+    fd.append('_subject','Nueva solicitud de asesoría — Retail Hub');
+    fd.append('_replyto', fd.get('contacto_email') || '');
+    try{
+      const resp = await fetch(form.action,{method:'POST', body:fd});
+      if(resp.ok){
+        alert('¡Gracias! Tu solicitud fue enviada. Te contactaremos por correo.');
+        form.reset(); contPreg.innerHTML=''; preguntasCard.style.display='none';
+        document.getElementById('closeModalBtn').click();
+      }else{
+        const t = await resp.text();
+        alert('Hubo un problema al enviar. ' + t);
+      }
+    }catch(err){
+      console.error(err);
+      alert('No se pudo enviar. Revisa tu conexión e inténtalo otra vez.');
     }
   });
-
-  // Llenar select de horas (9–13)
-  timeSel.innerHTML = '<option value="">Hora…</option>';
-  AGENDA_SLOTS.forEach(h=>{
-    const opt=document.createElement('option');
-    opt.value=String(h); opt.textContent=formatHour12(h);
-    timeSel.appendChild(opt);
-  });
-
-  agendaHelper.textContent = LAST_PLAN_PICKED ? `Plan seleccionado: ${LAST_PLAN_PICKED}` : '';
-}
-
-// Confirmar cita
-agendaConfirm?.addEventListener('click', async ()=>{
-  const dateStr = (document.getElementById('agendaDate')?.value||'').trim(); // dd/mm/aaaa
-  const hourStr = (document.getElementById('agendaTime')?.value||'').trim(); // 9..13
-  if(!dateStr){ alert('Elige una fecha.'); return; }
-  if(!hourStr){ alert('Elige una hora.'); return; }
-  const h = Number(hourStr);
-  if(!AGENDA_SLOTS.includes(h)){ alert('Elige un horario válido entre 09:00 y 01:00 PM.'); return; }
-
-  const [dd,mm,yyyy] = dateStr.split('/');
-  const fechaISO = `${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
-  const probe = new Date(`${fechaISO}T00:00:00`);
-  if (isNaN(probe.getTime()) || isWeekend(probe)){ alert('Solo atendemos de lunes a viernes.'); return; }
-
-  const nombre = (document.getElementById('agendaNombre')?.value||'').trim();
-  const tel    = (document.getElementById('agendaTel')?.value||'').trim();
-  if(!nombre || !tel){ alert('Por favor llena Nombre y Teléfono.'); return; }
-
-  if(!(addrCalle?.value && addrNumExt?.value && addrColonia?.value && addrCP?.value && addrEstado?.value)){
-    alert('Completa los campos de dirección obligatorios.'); return;
-  }
-  const dir = [
-    (addrCalle.value||'').trim(),
-    'No. '+(addrNumExt.value||'').trim(),
-    (addrNumInt?.value ? 'Int. '+addrNumInt.value.trim() : ''),
-    (addrColonia.value||'').trim(),
-    (addrCP.value||'').trim(),
-    (addrEstado.value||'').trim()
-  ].filter(Boolean).join(', ');
-
-  const fechaNice = new Date(fechaISO+'T00:00:00').toLocaleDateString('es-MX',{weekday:'long', day:'2-digit', month:'long', year:'numeric'});
-  const plan = (typeof LAST_PLAN_PICKED==='string' && LAST_PLAN_PICKED) ? LAST_PLAN_PICKED : 'Plan';
-  const subject = `Cita — ${plan} — ${fechaNice} ${formatHour12(h)}`;
-  const mensaje = [
-    `Solicitud de cita para: ${plan}`,
-    `Fecha: ${fechaNice}`,
-    `Hora: ${formatHour12(h)} (CDMX)`,
-    `Nombre: ${nombre}`,
-    `Teléfono: ${tel}`,
-    `Dirección: ${dir}`
-  ].join('\n');
-
-  const data = new URLSearchParams();
-  data.set('_subject', subject);
-  data.set('mensaje', mensaje);
-  data.set('contacto_nombre', nombre);
-  data.set('contacto_tel', tel);
-  data.set('rubro', 'Planes');
-  data.set('servicio', plan);
-
-  const btn=agendaConfirm, prev=btn.textContent; btn.disabled=true; btn.textContent='Enviando...';
-  try{
-    const resp = await fetch(ENDPOINT,{ method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}, body:data });
-    if(resp.ok){ alert('¡Listo! Tu cita fue solicitada. Te contactaremos para confirmar.'); closeAgendaModal?.(); }
-    else{ alert('No se pudo enviar la cita. '+await resp.text()); }
-  }catch(err){ console.error(err); alert('Error de red al enviar la cita. Inténtalo de nuevo.'); }
-  finally{ btn.disabled=false; btn.textContent=prev; }
-});
-
-/* ===== Modal de Plan ===== */
-const planModal      = document.getElementById('planModal');
-const planContent    = document.getElementById('planContent');
-const planCtaBtn     = document.getElementById('planCtaBtn');
-const planModalTitle = document.getElementById('planModalTitle');
-
-const openPlanModal  = () => planModal.classList.add('active');
-const closePlanModal = () => planModal.classList.remove('active');
-
-document.getElementById('closePlanModalBtn')?.addEventListener('click', (e)=>{ e.preventDefault(); closePlanModal(); });
-planModal && planModal.addEventListener('click', (e)=>{ if(e.target===planModal) closePlanModal(); });
-
-const PLAN_DETAIL = {
-  "Básico": `
-    <div style="margin-bottom:10px">
-      <div style="text-align:center; margin-bottom:10px">
-        <div style="font-weight:800;font-size:28px; line-height:1.2">$12,000</div>
-        <div class="helper" style="font-size:14px">(Pago por proyecto)</div>
-      </div>
-      <h4 style="margin:6px 0 10px">Organiza y estandariza</h4>
-      <p class="helper" style="margin:0 0 10px">Ideal para negocios pequeños que quieren ordenarse.</p>
-    </div>
-    <h4 style="margin:10px 0 6px">Desglose de servicios</h4>
-    <ul class="list-simple">
-      <li>Visita o mystery shopper inicial → traslado + 1 jornada de trabajo.</li>
-      <li>Diagnóstico y reporte escrito → análisis + documento con hallazgos y mejoras inmediatas.</li>
-      <li>Capacitación básica (4 hrs) → sesión en piso de venta con el equipo.</li>
-      <li>Checklist de estándares mínimos de exhibición.</li>
-      <li>Revisión de controles básicos (entradas/salidas).</li>
-    </ul>
-  `,
-  "Pro": `
-    <div style="margin-bottom:10px">
-      <div style="text-align:center; margin-bottom:10px">
-        <div style="font-weight:800;font-size:28px; line-height:1.2">$20,000</div>
-        <div class="helper" style="font-size:14px">(Mensuales)</div>
-      </div>
-      <h4 style="margin:6px 0 10px">Optimiza y reduce pérdidas</h4>
-      <p class="helper" style="margin:0 0 10px">Para tiendas con flujo más grande que quieren optimizar pérdidas y rotación.</p>
-    </div>
-    <h4 style="margin:10px 0 6px">Desglose de servicios</h4>
-    <ul class="list-simple">
-      <li>Todo lo del Básico.</li>
-      <li>2 visitas presenciales al mes → piso de venta + almacén.</li>
-      <li>Manual de operación personalizado → documento base para la tienda.</li>
-      <li>Capacitación a líderes y multifuncionales (1 sesión mensual).</li>
-      <li>Plan de control de inventarios cíclicos → sistema de conteos periódicos.</li>
-      <li>Reporte mensual con hallazgos + mejoras.</li>
-    </ul>
-  `,
-  "Max": `
-    <div style="margin-bottom:10px">
-      <div style="text-align:center; margin-bottom:10px">
-        <div style="font-weight:800;font-size:28px; line-height:1.2">$35,000</div>
-        <div class="helper" style="font-size:14px">(Mensuales)</div>
-      </div>
-      <h4 style="margin:6px 0 10px">Escala con estrategia</h4>
-      <p class="helper" style="margin:0 0 10px">Pensado para negocios que buscan escalar o franquiciar.</p>
-    </div>
-    <h4 style="margin:10px 0 6px">Desglose de servicios</h4>
-    <ul class="list-simple">
-      <li>Todo lo del Intermedio.</li>
-      <li>Capacitación continua (programa anual) → calendario de entrenamientos.</li>
-      <li>Diagnóstico semestral tipo mystery shopper (extra a las visitas).</li>
-      <li>KPI’s personalizados y dashboard → cuadro de mando para dueños/gerentes.</li>
-      <li>Soporte remoto ilimitado (WhatsApp, llamadas, Zoom).</li>
-      <li>Reporte ejecutivo mensual con recomendaciones estratégicas.</li>
-    </ul>
-  `
-};
-
-['planBasico','planPro','planMax'].forEach(id => {
-  const card = document.getElementById(id);
-  if (!card) return;
-  card.style.cursor = 'pointer';
-  card.addEventListener('click', ()=>{
-    const planName = card.dataset.plan || 'Plan';
-    planModalTitle.textContent = `Detalle del plan — ${planName}`;
-    planContent.innerHTML = PLAN_DETAIL[planName] || '<p>Plan no disponible.</p>';
-    planCtaBtn.textContent = PLAN_CTA_TEXT;
-
-    const planKey = planName.normalize('NFD').replace(/[\u0300-\u036f]/g,''); // 'Básico' -> 'Basico'
-    planModal.classList.remove('plan--Basico','plan--Pro','plan--Max');
-    planModal.classList.add(`plan--${planKey}`);
-
-    openPlanModal();
-  });
-});
-
-planCtaBtn && planCtaBtn.addEventListener('click', ()=>{
-  closePlanModal();
-  openAgendaModal();
-});
-
-/* ===== Cotización (Apps Script) ===== */
-const CONFIG = { /* tu CONFIG original */ };
 </script>
-<!-- === JS END: RetailHub === -->
 </body>
 </html>
