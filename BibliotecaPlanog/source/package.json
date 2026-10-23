@@ -1,0 +1,20 @@
+{
+  "name": "retailhub-biblioteca-planog",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node node_modules/vite/bin/vite.js --config vite.config.mts",
+    "build": "node node_modules/vite/bin/vite.js build --config vite.config.mts"
+  },
+  "dependencies": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "lucide-react": "1.31.0"
+  },
+  "devDependencies": {
+    "vite": "8.0.13",
+    "@vitejs/plugin-react": "6.0.2",
+    "typescript": "5.9.3"
+  }
+}
