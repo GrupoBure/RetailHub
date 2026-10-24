@@ -1,0 +1,3 @@
+# Merge this section into supabase/config.toml when deploying with the CLI.
+[functions.retailhub-api]
+verify_jwt = false
