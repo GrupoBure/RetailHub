@@ -1,3 +1,2 @@
-// Dirección pública del servidor del portal. Nunca colocar claves privadas aquí.
-// Mientras esté vacía se muestra únicamente la vista de diseño con ejemplos.
-window.RH_CONFIG = { apiBase: "" };
+// Dirección pública del servidor. Las claves privadas permanecen en Supabase.
+window.RH_CONFIG = { apiBase: "https://xgwfknypmzdbuhcpmmuz.supabase.co/functions/v1/retailhub-api" };
