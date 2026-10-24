@@ -14,14 +14,18 @@ const otherId='33333333-3333-4333-8333-333333333333';
 let target={id:otherId,email:'lector@usuarios.retailhub.invalid',user_metadata:{name:'Lector',department:'Montaje'},app_metadata:{rh_portal:true,role:'reader',disabled:false,custom_flag:'keep'}};
 let targetDeleted=false;
 const uid='22222222-2222-4222-8222-222222222222';
+const storeA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',storeB='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+let userStoreIds=[storeA],fileStore='a',folderMoved=false;
+const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let role='reader',disabled=false,published=true,oauthExchanges=0;
 let settings=new Map(),calls=[];
-const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',app_metadata:{rh_portal:true,role,disabled}});
+const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,store_ids:userStoreIds}});
 const reply=(data,status=200)=>new Response(data===null?null:JSON.stringify(data),{status});
 globalThis.fetch=async(url,init={})=>{
  url=String(url);calls.push({url,init});const u=new URL(url);
  if(u.pathname==='/auth/v1/user')return new Headers(init.headers).get('authorization')==='Bearer valid'?reply(user()):reply({},401);
  if(u.pathname==='/auth/v1/token')return reply({user:user(),access_token:'valid',refresh_token:'rotated',expires_in:3600});
+ if(u.pathname==='/auth/v1/admin/users'&&init.method==='POST')return reply({id:otherId,...JSON.parse(init.body)});
  if(u.pathname.startsWith('/auth/v1/admin/users/')){
  const targetId=u.pathname.split('/').at(-1);if(targetId===uid)return reply(user());
  if(targetDeleted||targetId!==otherId)return reply({},404);
@@ -36,27 +40,41 @@ globalThis.fetch=async(url,init={})=>{
  if(key)return reply(settings.has(key)?[{value:settings.get(key)}]:[]);
  return reply([...settings].map(([key,value])=>({key,value})));
  }
- if(u.pathname==='/rest/v1/rh_documents')return reply([{id,dropbox_id:'id:pdf',filename:'Prueba á.pdf',published}]);
+ if(u.pathname==='/rest/v1/rh_stores'){
+ if(init.method==='POST'){const d=JSON.parse(init.body);const found=storeRows.find(v=>v.dropbox_id===d.dropbox_id);if(found)Object.assign(found,d);else storeRows.push({...d,id:crypto.randomUUID(),enabled:true});return reply([found||storeRows.at(-1)]);}
+ let rows=[...storeRows];const ids=u.searchParams.get('id');if(ids?.startsWith('eq.'))rows=rows.filter(v=>v.id===ids.slice(3));if(ids?.startsWith('in.'))rows=rows.filter(v=>ids.slice(4,-1).split(',').includes(v.id));if(u.searchParams.get('enabled')==='eq.true')rows=rows.filter(v=>v.enabled);return reply(rows);
+ }
+ if(u.pathname==='/rest/v1/rh_documents'){
+ if(init.method==='POST')return reply(null,201);
+ const selected=u.searchParams.get('store_id');if(selected&&selected!=='eq.'+storeA)return reply([]);
+ return reply([{id,store_id:storeA,dropbox_id:'id:pdf',filename:'Prueba á.pdf',published}]);}
  if(u.pathname==='/oauth2/token'){
  const body=new URLSearchParams(init.body);if(body.get('grant_type')==='authorization_code'){oauthExchanges++;return reply({refresh_token:'private-dbx-refresh'});}return reply({access_token:'private-dbx-token',expires_in:14400});
  }
- if(u.pathname==='/2/files/create_folder_v2')return reply({metadata:{'.tag':'folder'}});
+ if(u.pathname==='/2/files/create_folder_v2'){const path=JSON.parse(init.body).path;return reply({metadata:{'.tag':'folder',id:'id:new-folder',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path}});}
+ if(u.pathname==='/2/files/get_metadata'){
+ const path=JSON.parse(init.body).path;
+ if(path==='id:pdf')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda '+fileStore+'/planogramas/prueba á.pdf'});
+ const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path);if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
+ throw Error('Unexpected metadata path: '+path);
+ }
+ if(u.pathname==='/2/files/list_folder')return reply({entries:[{'.tag':'folder',id:'id:store-a',name:'Tienda A',path_lower:'/retail hub/portal/tienda a',path_display:'/Retail Hub/Portal/Tienda A'},{'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'}],has_more:false});
  if(u.pathname==='/2/files/upload_session/start')return reply({session_id:'upload-id'});
  if(u.pathname==='/2/files/upload_session/append_v2')return reply(null,200);
- if(u.pathname==='/2/files/upload_session/finish')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
+ if(u.pathname==='/2/files/upload_session/finish')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
  if(u.pathname==='/2/files/download'){const range=new Headers(init.headers).get('range');return new Response('%PDF-test',{status:range?206:200,headers:range?{'content-range':'bytes 0-8/9'}:{}});}
  throw Error('Unexpected mock request: '+url);
 };
 const request=(path,{method='GET',token='valid',body,headers={}}={})=>handler(new Request('https://project.supabase.co/functions/v1/retailhub-api/'+path,{method,headers:{Origin:'https://grupobure.github.io',...(token?{Authorization:'Bearer '+token}:{}),...headers},body:body===undefined?undefined:typeof body==='string'?body:JSON.stringify(body)}));
 let checks=0;
 async function check(name,fn){await fn();checks++;console.log('PASS '+name);}
-await check('CORS preflight authorizes GitHub origin',async()=>{const r=await request('documents',{method:'OPTIONS',token:null});assert.equal(r.status,204);assert.equal(r.headers.get('access-control-allow-origin'),'https://grupobure.github.io');});
+await check('CORS preflight authorizes GitHub origin',async()=>{const r=await request('documents?store='+storeA,{method:'OPTIONS',token:null});assert.equal(r.status,204);assert.equal(r.headers.get('access-control-allow-origin'),'https://grupobure.github.io');});
 await check('foreign origin cannot log in',async()=>assert.equal((await request('login',{method:'POST',body:{},headers:{Origin:'https://other.example'}})).status,403));
-await check('anonymous and invalid sessions cannot list documents',async()=>{assert.equal((await request('documents',{token:null})).status,401);assert.equal((await request('documents',{token:'invalid'})).status,401);});
+await check('anonymous and invalid sessions cannot list documents',async()=>{assert.equal((await request('documents?store='+storeA,{token:null})).status,401);assert.equal((await request('documents?store='+storeA,{token:'invalid'})).status,401);});
 await check('login returns only user session, never service credentials',async()=>{const r=await request('login',{method:'POST',token:null,body:{username:'victor',password:'password-test'}});assert.equal(r.status,200);const d=await r.json();assert.equal(d.session.access_token,'valid');assert.ok(!JSON.stringify(d).includes('private-test'));});
-await check('disabled users cannot log in or use an existing token',async()=>{disabled=true;assert.equal((await request('login',{method:'POST',body:{username:'victor',password:'password-test'}})).status,403);assert.equal((await request('documents')).status,403);disabled=false;});
+await check('disabled users cannot log in or use an existing token',async()=>{disabled=true;assert.equal((await request('login',{method:'POST',body:{username:'victor',password:'password-test'}})).status,403);assert.equal((await request('documents?store='+storeA)).status,403);disabled=false;});
 await check('readers cannot use administrative routes or change publication',async()=>{for(const [path,method,body] of [['users','GET'],['sync','POST',{}],['upload/start','POST',{}],['documents/'+id,'PATCH',{published:false}],['dropbox/connect','POST',{}]])assert.equal((await request(path,{method,body})).status,403);});
-await check('reader catalog applies publication filter',async()=>{await request('documents');assert.ok(calls.at(-1).url.includes('published=eq.true'));});
+await check('reader catalog applies publication filter',async()=>{await request('documents?store='+storeA);assert.ok(calls.at(-1).url.includes('published=eq.true'));});
 await check('hidden PDFs cannot be linked or downloaded by readers',async()=>{published=false;assert.equal((await request('documents/'+id+'/link',{method:'POST'})).status,404);assert.equal((await request('documents/'+id+'/file')).status,404);published=true;});
 let link;
 await check('file tickets are hashed at rest and stream partial PDF content',async()=>{const r=await request('documents/'+id+'/link',{method:'POST'});assert.equal(r.status,200);link=await r.json();const token=new URL(link.url).searchParams.get('ticket');assert.ok(![...settings.keys()].some(k=>k.includes(token)));const file=await request(link.url.split('retailhub-api/')[1],{token:null,headers:{Range:'bytes=0-8'}});assert.equal(file.status,206);assert.equal(file.headers.get('content-type'),'application/pdf');assert.equal(file.headers.get('content-range'),'bytes 0-8/9');assert.equal(await file.text(),'%PDF-test');});
@@ -64,7 +82,7 @@ await check('issued tickets stop working when user is disabled or PDF hidden',as
 await check('expired and fabricated tickets are denied',async()=>{for(const [key,value] of settings)if(key.startsWith('file:'))settings.set(key,JSON.stringify({...JSON.parse(value),expires:1}));assert.equal((await request(link.url.split('retailhub-api/')[1],{token:null})).status,403);assert.equal((await request('documents/'+id+'/file?ticket=fake',{token:null})).status,403);});
 await check('invalid upload tickets and oversized JSON fail safely',async()=>{role='admin';assert.equal((await request('upload/chunk',{method:'POST',body:'x',headers:{'X-Upload-Ticket':'fake'}})).status,403);assert.equal((await request('login',{method:'POST',body:'x'.repeat(17000)})).status,413);});
 await check('admin upload accepts PDF chunks and commits metadata; invalid first bytes are denied',async()=>{
- const start=await request('upload/start',{method:'POST',body:{filename:'Prueba á.pdf',category:'Planogramas'}});assert.equal(start.status,200);const {ticket}=await start.json();
+ const start=await request('upload/start',{method:'POST',body:{filename:'Prueba á.pdf',category:'Planogramas',store_id:storeA}});assert.equal(start.status,200);const {ticket}=await start.json();
  const headers={'X-Upload-Ticket':ticket,'X-Upload-Offset':'0'};
  assert.equal((await request('upload/chunk',{method:'POST',headers,body:'html'})).status,400);
  assert.equal((await request('upload/chunk',{method:'POST',headers,body:'%PDF-test'})).status,200);
@@ -98,5 +116,54 @@ await check('delete requires matching username and preserves documents',async()=
  at=calls.length;assert.equal((await request('users/'+otherId,{method:'DELETE',body:{confirm_username:'coordinador.01'}})).status,200);assert.equal(targetDeleted,true);assert.ok(!calls.slice(at).some(c=>c.url.includes('rh_documents')));
 });
 await check('CORS preflight supports DELETE',async()=>{const r=await request('users/'+otherId,{method:'OPTIONS',token:null});assert.ok(r.headers.get('access-control-allow-methods').includes('DELETE'));});
-await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents');const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
+await check('store list contains only assigned stores; an unassigned reader sees none',async()=>{
+ role='reader';userStoreIds=[storeA];let d=await (await request('stores')).json();assert.deepEqual(d.stores.map(v=>v.id),[storeA]);assert.ok(!JSON.stringify(d).includes('dropbox_id'));
+ userStoreIds=[];d=await (await request('stores')).json();assert.deepEqual(d.stores,[]);assert.equal((await request('documents?store='+storeA)).status,404);assert.equal((await request('documents/'+id+'/link',{method:'POST'})).status,404);userStoreIds=[storeA];
+});
+await check('unselected library never lists all documents, including for admins',async()=>{
+ assert.deepEqual(await (await request('documents')).json(),{documents:[]});role='admin';assert.deepEqual(await (await request('documents')).json(),{documents:[]});role='reader';
+});
+await check('reader cannot list another store or request a link or file from it',async()=>{
+ userStoreIds=[storeB];assert.equal((await request('documents?store='+storeA)).status,404);assert.equal((await request('documents/'+id+'/link',{method:'POST'})).status,404);assert.equal((await request('documents/'+id+'/file')).status,404);userStoreIds=[storeA];
+});
+await check('revoking store access invalidates a previously issued file ticket',async()=>{
+ const link=await (await request('documents/'+id+'/link',{method:'POST'})).json();userStoreIds=[];assert.equal((await request(link.url.split('retailhub-api/')[1],{token:null})).status,404);userStoreIds=[storeA];
+});
+await check('disabled stores cannot be listed or accessed by readers',async()=>{
+ storeRows[0].enabled=false;assert.deepEqual((await (await request('stores')).json()).stores,[]);assert.equal((await request('documents?store='+storeA)).status,404);assert.equal((await request('documents/'+id+'/file')).status,404);storeRows[0].enabled=true;
+});
+await check('moving a PDF to another store blocks its former permission even before sync',async()=>{
+ fileStore='b';assert.equal((await request('documents/'+id+'/file')).status,404);assert.equal((await request('documents/'+id+'/link',{method:'POST'})).status,404);fileStore='a';
+ folderMoved=true;assert.equal((await request('documents/'+id+'/file')).status,404);folderMoved=false;
+});
+await check('readers cannot create stores or grant themselves stores',async()=>{
+ assert.equal((await request('stores',{method:'POST',body:{name:'Unauthorized'}})).status,403);
+ assert.equal((await request('users/'+uid,{method:'PATCH',body:{store_ids:[storeB]}})).status,403);
+});
+await check('admins see all stores and can validate and assign multiple stores to a reader',async()=>{
+ role='admin';assert.equal((await (await request('stores')).json()).stores.length,2);targetDeleted=false;
+ let r=await request('users/'+otherId,{method:'PATCH',body:{store_ids:[storeA,storeB],role:'reader'}});assert.equal(r.status,200);const data=await r.json();assert.deepEqual(data.user.store_ids,[storeA,storeB]);assert.equal(target.app_metadata.role,'reader');assert.equal(target.app_metadata.custom_flag,'keep');
+ r=await request('users/'+otherId,{method:'PATCH',body:{store_ids:[]}});assert.equal(r.status,200);assert.deepEqual((await r.json()).user.store_ids,[]);
+ for(const ids of [['bad'],['dddddddd-dddd-4ddd-8ddd-dddddddddddd'],[storeA,'bad']])assert.equal((await request('users/'+otherId,{method:'PATCH',body:{store_ids:ids}})).status,400);
+ storeRows[1].enabled=false;assert.equal((await request('users/'+otherId,{method:'PATCH',body:{store_ids:[storeB]}})).status,400);storeRows[1].enabled=true;
+});
+await check('sync associates files to stable store IDs and preserves publication and user grants',async()=>{
+ const r=await request('sync',{method:'POST',body:{}});assert.equal(r.status,200);const write=calls.filter(c=>new URL(c.url).pathname==='/rest/v1/rh_documents'&&c.init.method==='POST').at(-1);const row=JSON.parse(write.init.body)[0];assert.equal(row.store_id,storeA);assert.equal(row.category,'Planogramas');assert.equal(row.published,undefined);assert.ok(!calls.slice(-5).some(c=>c.url.includes('/admin/users')));
+});
+await check('upload requires a store and cannot use invalid store IDs',async()=>{
+ for(const store_id of [undefined,'bad','dddddddd-dddd-4ddd-8ddd-dddddddddddd'])assert.equal((await request('upload/start',{method:'POST',body:{filename:'test.pdf',category:'General',store_id}})).status,404);
+});
+await check('admin store creation creates a Dropbox folder without granting reader access',async()=>{
+ const r=await request('stores',{method:'POST',body:{name:'Tienda nueva'}});assert.equal(r.status,201);const created=(await r.json()).store;assert.equal(created.name,'Tienda nueva');assert.ok(!userStoreIds.includes(created.id));assert.equal((await request('stores',{method:'POST',body:{name:'../escape'}})).status,400);
+});
+await check('new readers default to zero stores and invalid assignments cannot create accounts',async()=>{
+ role='admin';let r=await request('users',{method:'POST',body:{username:'nuevo.lector',name:'Nuevo lector',password:'test-password-123'}});assert.equal(r.status,201);assert.deepEqual((await r.json()).user.store_ids,[]);
+ r=await request('users',{method:'POST',body:{username:'nuevo.lector',password:'test-password-123',store_ids:[storeA]}});assert.equal(r.status,201);assert.deepEqual((await r.json()).user.store_ids,[storeA]);
+ const count=calls.filter(c=>new URL(c.url).pathname==='/auth/v1/admin/users'&&c.init.method==='POST').length;
+ r=await request('users',{method:'POST',body:{username:'bad.lector',password:'test-password-123',store_ids:['fake']}});assert.equal(r.status,400);assert.equal(calls.filter(c=>new URL(c.url).pathname==='/auth/v1/admin/users'&&c.init.method==='POST').length,count);
+});
+await check('editable user metadata cannot grant stores or admin permissions',async()=>{
+ role='reader';userStoreIds=[];assert.deepEqual((await (await request('stores')).json()).stores,[]);assert.equal((await request('stores',{method:'POST',body:{name:'Fake'}})).status,403);assert.equal((await request('documents?store='+storeB)).status,404);userStoreIds=[storeA];role='admin';
+});
+await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

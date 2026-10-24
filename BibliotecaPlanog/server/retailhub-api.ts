@@ -2,7 +2,7 @@
 // No credentials belong in this file. Deploy with gateway Verify JWT OFF;
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
-const API_VERSION = '2026-10-24-users';
+const API_VERSION = '2026-10-24-stores';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -56,7 +56,7 @@ export async function requireUser(r:Request,admin=false){
  const t=bearer(r);if(!t)throw new PortalError(401,'Inicia sesión para continuar.');
  return membership(await supa('/auth/v1/user',{},t),admin);
 }
-export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at});
+export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u)});
 export function username(v:unknown){if(typeof v!=='string'||!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(v.toLowerCase()))throw new PortalError(400,'Usa de 3 a 40 letras sin acentos, números, puntos o guiones para el usuario.');return v.toLowerCase();}
 const email=(v:unknown)=>username(v)+'@usuarios.retailhub.invalid';
 export {email};
@@ -93,18 +93,45 @@ export async function content(path:string,args:any,body:BodyInit|null=null,range
  const r=await fetch('https://content.dropboxapi.com/2/'+path,{method:'POST',headers:h,body});
  if(!r.ok&&r.status!==416)throw new PortalError(r.status===429?429:502,'No se pudo transferir el archivo con Dropbox. Intenta nuevamente.');return r;
 }
-export function record(e:any){
+const uuid=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(v);
+function storeIds(u:any):string[]{return Array.isArray(u?.app_metadata?.store_ids)?[...new Set((u.app_metadata.store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
+const safeStore=(s:any)=>({id:s.id,name:s.name,enabled:s.enabled});
+function folderIsStore(e:any){const root=config().root.toLowerCase()+'/';return e?.['.tag']==='folder'&&String(e.path_lower||'').startsWith(root)&&!String(e.path_lower).slice(root.length).includes('/');}
+async function saveStoreFolder(e:any){
+ if(!folderIsStore(e))throw new PortalError(400,'La tienda debe ser una carpeta directamente dentro de Retail Hub/Portal.');
+ const rows=await supa('/rest/v1/rh_stores?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body:JSON.stringify({dropbox_id:e.id,name:e.name,path_lower:e.path_lower,updated_at:new Date().toISOString()})});return rows[0];
+}
+async function requireStore(id:unknown,user:any){
+ if(!uuid(id))throw new PortalError(404,'Tienda no disponible.');
+ if(user.app_metadata.role!=='admin'&&!storeIds(user).includes(id))throw new PortalError(404,'Tienda no disponible.');
+ const rows=await supa('/rest/v1/rh_stores?id=eq.'+id+'&select=id,name,dropbox_id,path_lower,enabled');const store=rows[0];
+ if(!store||(user.app_metadata.role!=='admin'&&!store.enabled))throw new PortalError(404,'Tienda no disponible.');return store;
+}
+async function validateStoreIds(value:unknown){
+ if(!Array.isArray(value)||value.length>100||value.some(v=>!uuid(v)))throw new PortalError(400,'Selecciona tiendas válidas (hasta 100 por usuario).');
+ const ids=[...new Set((value as string[]).map(v=>v.toLowerCase()))];if(!ids.length)return ids;
+ const rows=await supa('/rest/v1/rh_stores?select=id&id=in.('+ids.join(',')+')&enabled=eq.true');
+ if(rows.length!==ids.length)throw new PortalError(400,'Alguna tienda ya no está disponible. Actualiza la lista.');return ids;
+}
+async function liveFolder(store:any){const folder=await dbx('files/get_metadata',{path:store.dropbox_id});if(!folderIsStore(folder))throw new PortalError(404,'La carpeta de esta tienda cambió. Sincroniza Dropbox.');return folder;}
+export async function record(e:any,cache=new Map<string,any>()){
  const root=config().root.toLowerCase()+'/';const path=String(e.path_lower||'');
  if(!path.startsWith(root)||!String(e.name).toLowerCase().endsWith('.pdf'))return null;
  const parts=(e.path_display||e.path_lower).slice(config().root.length+1).split('/');
- return {dropbox_id:e.id,title:e.name.replace(/\.pdf$/i,'').replace(/_/g,' '),filename:e.name,category:parts.length>1?parts[0]:'General',size:e.size,revision:e.rev,modified_at:e.server_modified,updated_at:new Date().toISOString()};
+ // Root PDFs have no store and are never published to readers.
+ if(parts.length<2)return null;
+ const storePath=root+path.slice(root.length).split('/')[0];let store=cache.get(storePath);
+ if(!store){store=await saveStoreFolder(await dbx('files/get_metadata',{path:storePath}));cache.set(storePath,store);}
+ return {store_id:store.id,dropbox_id:e.id,title:e.name.replace(/\.pdf$/i,'').replace(/_/g,' '),filename:e.name,category:parts.length>2?parts[1]:'General',size:e.size,revision:e.rev,modified_at:e.server_modified,updated_at:new Date().toISOString()};
 }
 export async function syncBatch(cursor?:string){
  const c=config();if(!c.root.startsWith('/')||c.root==='/')throw new PortalError(503,'Selecciona una carpeta dedicada para el portal.');
- const d=await dbx(cursor?'files/list_folder/continue':'files/list_folder',cursor?{cursor}:{path:c.root,recursive:true,include_deleted:false,limit:200});
- const rows=d.entries.filter((e:any)=>e['.tag']==='file').map(record).filter(Boolean);
+ const d=await dbx(cursor?'files/list_folder/continue':'files/list_folder',cursor?{cursor}:{path:c.root,recursive:true,include_deleted:false,limit:50});
+ const cache=new Map<string,any>();
+ for(const e of d.entries)if(folderIsStore(e))cache.set(e.path_lower,await saveStoreFolder(e));
+ const rows=[];let skipped=0;for(const e of d.entries)if(e['.tag']==='file'){const row=await record(e,cache);if(row)rows.push(row);else if(String(e.name).toLowerCase().endsWith('.pdf'))skipped++;}
  if(rows.length)await supa('/rest/v1/rh_documents?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rows)});
- return {count:rows.length,cursor:d.has_more?d.cursor:null};
+ return {count:rows.length,skipped,cursor:d.has_more?d.cursor:null};
 }
 
 async function seal(type:string,value:Record<string,unknown>){return encrypted(JSON.stringify({...value,type}));}
@@ -113,8 +140,12 @@ async function digest(v:string){return Array.from(new Uint8Array(await crypto.su
 const endpoint=(r:Request)=>config().url+'/functions/v1/retailhub-api';
 async function documentRecord(id:string,user:any){
  if(!/^[a-f0-9-]{36}$/.test(id))throw new PortalError(404,'Documento no encontrado.');
- const rows=await supa('/rest/v1/rh_documents?id=eq.'+id+'&select=dropbox_id,filename,published');const d=rows[0];
- if(!d||(!d.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Documento no disponible.');return d;
+ const rows=await supa('/rest/v1/rh_documents?id=eq.'+id+'&select=dropbox_id,filename,published,store_id');const d=rows[0];
+ if(!d||(!d.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Documento no disponible.');
+ const store=await requireStore(d.store_id,user);
+ // Re-check Dropbox location: a moved file must not inherit its former store's access.
+ const [folder,file]=await Promise.all([liveFolder(store),dbx('files/get_metadata',{path:d.dropbox_id})]);
+ if(file['.tag']!=='file'||!String(file.name).toLowerCase().endsWith('.pdf')||!String(file.path_lower||'').startsWith(folder.path_lower+'/'))throw new PortalError(404,'El documento cambió de tienda. Sincroniza Dropbox.');return {...d,filename:file.name};
 }
 // Expiring settings records contain only ticket hashes, never readable file links.
 let cleanedAt=0;
@@ -175,9 +206,20 @@ export async function handle(r:Request){
  return new Response(upstream.body,{status:upstream.status,headers});}
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
+ if(route==='stores'&&method==='GET'){
+ const ids=storeIds(user);if(user.app_metadata.role!=='admin'&&!ids.length)return json({stores:[]});
+ const filter=user.app_metadata.role==='admin'?'':'&enabled=eq.true&id=in.('+ids.join(',')+')';
+ return json({stores:(await supa('/rest/v1/rh_stores?select=id,name,enabled&order=name.asc&limit=1000'+filter)).map(safeStore)});}
+ if(route==='stores'&&method==='POST'){
+ await requireUser(r,true);const b=await bodyJSON(r);const name=typeof b.name==='string'?b.name.trim().normalize('NFC'):'';
+ if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');
+ const path=config().root+'/'+name;let folder;
+ try{folder=(await dbx('files/create_folder_v2',{path,autorename:false})).metadata;}catch{folder=await dbx('files/get_metadata',{path});}
+ return json({store:safeStore(await saveStoreFolder(folder))},201);}
  if(route==='documents'&&method==='GET'){
- const fields='id,title,filename,category,size,modified_at,published';
- return json({documents:await supa('/rest/v1/rh_documents?select='+fields+(user.app_metadata.role==='admin'?'':'&published=eq.true')+'&order=modified_at.desc&limit=5000')});}
+ const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});await requireStore(id,user);
+ const fields='id,title,filename,category,size,modified_at,published,store_id';
+ return json({documents:await supa('/rest/v1/rh_documents?select='+fields+'&store_id=eq.'+id+(user.app_metadata.role==='admin'?'':'&published=eq.true')+'&order=modified_at.desc&limit=5000')});}
  if(p[0]==='documents'&&p[1]&&p[2]==='link'&&method==='POST'){
  await documentRecord(p[1],user);const token=crypto.randomUUID()+crypto.randomUUID();
  const expires=Date.now()+15*60*1000;await transient('file:'+await digest(token),{uid:user.id,doc:p[1],expires});
@@ -200,8 +242,8 @@ export async function handle(r:Request){
  let all:any[]=[];for(let page=1;page<=20;page++){const d=await supa('/auth/v1/admin/users?page='+page+'&per_page=100');all.push(...d.users);if(d.users.length<100)break;}
  return json({users:all.filter(u=>u.app_metadata?.rh_portal).map(safeUser)});}
  if(route==='users'&&method==='POST'){
- const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
- const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false}})});
+ const b:any=await bodyJSON(r);const assignedStores=await validateStoreIds(b.store_ids??[]);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
+ const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,store_ids:assignedStores}})});
  return json({user:safeUser(u)},201);}
  if(p[0]==='users'&&p.length===2&&(method==='PATCH'||method==='DELETE')){
  if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Usuario no encontrado.');
@@ -216,7 +258,8 @@ export async function handle(r:Request){
  if(b.username!==undefined){const nextEmail=email(b.username);if(nextEmail!==target.email){changes.email=nextEmail;changes.email_confirm=true;}}
  if(b.name!==undefined){if(typeof b.name!=='string'||!b.name.trim()||b.name.trim().length>100)throw new PortalError(400,'Escribe un nombre de hasta 100 caracteres.');changes.user_metadata={...target.user_metadata,name:b.name.trim()};}
  if(b.role!==undefined&&b.role!=='admin'&&b.role!=='reader')throw new PortalError(400,'Permisos no válidos.');
- if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...target.app_metadata,...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
+ if(b.store_ids!==undefined)changes.app_metadata={...target.app_metadata,store_ids:await validateStoreIds(b.store_ids)};
+ if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
  if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de entre 12 y 256 caracteres.');changes.password=b.password;}
  if(!Object.keys(changes).length)throw new PortalError(400,'No hay cambios para guardar.');
  const u=await supa('/auth/v1/admin/users/'+p[1],{method:'PUT',body:JSON.stringify(changes)});return json({user:safeUser(u)});}
@@ -226,13 +269,13 @@ export async function handle(r:Request){
  if(!name.toLowerCase().endsWith('.pdf')||/[\/\\\u0000-\u001f]/.test(name)||name.length>180||name==='..'||!name)throw new PortalError(400,'Selecciona un archivo PDF con un nombre válido.');
  if(!/^[\p{L}\p{N} _-]{1,60}$/u.test(category))throw new PortalError(400,'Revisa el nombre de la categoría.');
  const root=config().root;if(!root.startsWith('/')||root==='/')throw new PortalError(503,'Selecciona una carpeta dedicada para el portal.');
- const folder=root+'/'+category;
+ const store=await requireStore(b.store_id,user);const storeFolder=await liveFolder(store);const folder=storeFolder.path_display+'/'+category;
  try{await dbx('files/create_folder_v2',{path:folder,autorename:false});}catch(e){if(e instanceof PortalError&&e.message.includes('ocupado'))throw e;await dbx('files/get_metadata',{path:folder});}
  const response=await content('files/upload_session/start',{close:false},new Uint8Array());const d=await response.json() as any;
- const ticket=await seal('upload',{sid:d.session_id,path:folder+'/'+name,uid:user.id,expires:Date.now()+3600000});return json({ticket});}
+ const ticket=await seal('upload',{sid:d.session_id,path:folder+'/'+name,uid:user.id,store_id:store.id,expires:Date.now()+3600000});return json({ticket});}
  if(route==='upload/chunk'||route==='upload/finish'){
  const ticket=r.headers.get('X-Upload-Ticket');if(!ticket)throw new PortalError(400,'Falta la sesión de subida.');
- const t=await unseal('upload',ticket);if(t.uid!==user.id||t.expires<Date.now())throw new PortalError(403,'La sesión de subida venció.');
+ const t=await unseal('upload',ticket);const uploadStore=await requireStore(t.store_id,user);const uploadFolder=await liveFolder(uploadStore);if(!String(t.path).toLowerCase().startsWith(uploadFolder.path_lower+'/'))throw new PortalError(403,'La tienda cambió. Inicia otra vez la subida.');if(t.uid!==user.id||t.expires<Date.now())throw new PortalError(403,'La sesión de subida venció.');
  const offset=Number(r.headers.get('X-Upload-Offset'));if(!Number.isSafeInteger(offset)||offset<0)throw new PortalError(400,'Posición de subida no válida.');
  const length=Number(r.headers.get('content-length'));if(length>8*1024*1024)throw new PortalError(413,'El bloque es demasiado grande.');
  const bytes=await bounded(r,8*1024*1024);const data=bytes.buffer;if(data.byteLength>8*1024*1024)throw new PortalError(413,'El bloque es demasiado grande.');
@@ -240,7 +283,7 @@ export async function handle(r:Request){
  if(route==='upload/finish'&&offset===0&&data.byteLength===0)throw new PortalError(400,'El PDF está vacío.');
  if(route==='upload/chunk'){await content('files/upload_session/append_v2',{cursor:{session_id:t.sid,offset},close:false},data);return json({ok:true});}
  const upstream=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:true,mute:false,strict_conflict:false}},data);
- const rec=record(await upstream.json());if(rec)await supa('/rest/v1/rh_documents?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rec)});
+ const rec=await record(await upstream.json());if(rec)await supa('/rest/v1/rh_documents?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rec)});
  return json({ok:true});}}
  throw new PortalError(404,'Ruta no encontrada.');
  }catch(e){if(e instanceof PortalError)return json({error:e.message},e.status);return json({error:'No se pudo completar la solicitud. Intenta nuevamente.'},500);}
