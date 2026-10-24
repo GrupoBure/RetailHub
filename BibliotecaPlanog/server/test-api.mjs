@@ -18,7 +18,7 @@ const storeA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',storeB='bbbbbbbb-bbbb-4bbb-8
 let userStoreIds=[storeA],fileStore='a',folderMoved=false;
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let role='reader',disabled=false,published=true,oauthExchanges=0;
-let settings=new Map(),calls=[];
+let settings=new Map(),calls=[],createdFolders=new Map();
 const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,store_ids:userStoreIds}});
 const reply=(data,status=200)=>new Response(data===null?null:JSON.stringify(data),{status});
 globalThis.fetch=async(url,init={})=>{
@@ -51,11 +51,18 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/oauth2/token'){
  const body=new URLSearchParams(init.body);if(body.get('grant_type')==='authorization_code'){oauthExchanges++;return reply({refresh_token:'private-dbx-refresh'});}return reply({access_token:'private-dbx-token',expires_in:14400});
  }
- if(u.pathname==='/2/files/create_folder_v2'){const path=JSON.parse(init.body).path;return reply({metadata:{'.tag':'folder',id:'id:new-folder',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path}});}
+ if(u.pathname==='/2/files/create_folder_v2'){
+ const path=JSON.parse(init.body).path,lower=path.toLowerCase();
+ if(createdFolders.has(lower)||storeRows.some(v=>v.path_lower===lower))return reply({error_summary:'path/conflict/folder/'},409);
+ const metadata={id:'id:created:'+lower,name:path.split('/').at(-1),path_lower:lower,path_display:path};createdFolders.set(lower,metadata);
+ // Dropbox's concrete FolderMetadata response does not have a .tag discriminator.
+ return reply({metadata});
+ }
  if(u.pathname==='/2/files/get_metadata'){
  const path=JSON.parse(init.body).path;
  if(path==='id:pdf')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda '+fileStore+'/planogramas/prueba á.pdf'});
- const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path);if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
+ const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path.toLowerCase());if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
+ if(createdFolders.has(path.toLowerCase()))return reply({...createdFolders.get(path.toLowerCase()),'.tag':'folder'});
  throw Error('Unexpected metadata path: '+path);
  }
  if(u.pathname==='/2/files/list_folder')return reply({entries:[{'.tag':'folder',id:'id:store-a',name:'Tienda A',path_lower:'/retail hub/portal/tienda a',path_display:'/Retail Hub/Portal/Tienda A'},{'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'}],has_more:false});
@@ -155,6 +162,12 @@ await check('upload requires a store and cannot use invalid store IDs',async()=>
 });
 await check('admin store creation creates a Dropbox folder without granting reader access',async()=>{
  const r=await request('stores',{method:'POST',body:{name:'Tienda nueva'}});assert.equal(r.status,201);const created=(await r.json()).store;assert.equal(created.name,'Tienda nueva');assert.ok(!userStoreIds.includes(created.id));assert.equal((await request('stores',{method:'POST',body:{name:'../escape'}})).status,400);
+});
+await check('retrying an existing store reuses its folder and permissions instead of duplicating it',async()=>{
+ const store=storeRows.find(v=>v.name==='Tienda nueva');const before=storeRows.length;const r=await request('stores',{method:'POST',body:{name:'Tienda nueva'}});assert.equal(r.status,201);assert.equal((await r.json()).store.id,store.id);assert.equal(storeRows.length,before);assert.ok(!userStoreIds.includes(store.id));
+});
+await check('store creation accepts accented names with actual untagged FolderMetadata',async()=>{
+ const r=await request('stores',{method:'POST',body:{name:'BK Martín Carrera'}});assert.equal(r.status,201);const store=(await r.json()).store;assert.equal(store.name,'BK Martín Carrera');assert.equal(storeRows.find(v=>v.id===store.id).path_lower,'/retail hub/portal/bk martín carrera');
 });
 await check('new readers default to zero stores and invalid assignments cannot create accounts',async()=>{
  role='admin';let r=await request('users',{method:'POST',body:{username:'nuevo.lector',name:'Nuevo lector',password:'test-password-123'}});assert.equal(r.status,201);assert.deepEqual((await r.json()).user.store_ids,[]);

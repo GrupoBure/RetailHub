@@ -65,4 +65,8 @@ La tabla privada `rh_stores` registra las carpetas. `rh_documents.store_id` asoc
 
 Los tickets del visor son enlaces de acceso temporal de 15 minutos vinculados al usuario que los generó: quien posea el enlace puede usarlo durante su vigencia mientras ese usuario siga autorizado. Revocar el permiso, ocultar el documento o desactivar la cuenta bloquea solicitudes nuevas. No es posible retirar un PDF que ya fue descargado.
 
-Se comprobaron 37 casos de autorización e integración con servicios simulados, además de compilación y tipos del frontend/servidor. La ejecución del SQL y la prueba con las cuentas reales se hacen durante la activación. La transmisión de PDF sigue consumiendo transferencia de Supabase; dividir por tiendas no cambia esa cuota.
+Se comprobaron 39 casos de autorización e integración con servicios simulados, además de compilación y tipos del frontend/servidor. La ejecución del SQL y la prueba con las cuentas reales se hacen durante la activación. La transmisión de PDF sigue consumiendo transferencia de Supabase; dividir por tiendas no cambia esa cuota.
+
+### Corrección de creación de carpetas
+
+El build `store-folder-fix-1` normaliza la respuesta concreta de `files/create_folder_v2`, que devuelve FolderMetadata sin el discriminador `.tag` usado en los listados. Conserva la comprobación de que la carpeta esté inmediatamente bajo Portal. La repetición con el mismo nombre reutiliza la carpeta y la tienda existentes. Incluye pruebas para respuestas sin `.tag`, carpetas ya creadas y nombres con acentos. Solo requiere volver a desplegar la función, sin SQL adicional ni cambios de secretos.

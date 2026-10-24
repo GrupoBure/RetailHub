@@ -3,6 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
+const API_BUILD = 'store-folder-fix-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -171,7 +172,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -214,7 +215,8 @@ export async function handle(r:Request){
  await requireUser(r,true);const b=await bodyJSON(r);const name=typeof b.name==='string'?b.name.trim().normalize('NFC'):'';
  if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');
  const path=config().root+'/'+name;let folder;
- try{folder=(await dbx('files/create_folder_v2',{path,autorename:false})).metadata;}catch{folder=await dbx('files/get_metadata',{path});}
+ // create_folder_v2 returns concrete FolderMetadata, without the union .tag.
+ try{folder={...(await dbx('files/create_folder_v2',{path,autorename:false})).metadata,'.tag':'folder'};}catch{folder=await dbx('files/get_metadata',{path});}
  return json({store:safeStore(await saveStoreFolder(folder))},201);}
  if(route==='documents'&&method==='GET'){
  const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});await requireStore(id,user);
