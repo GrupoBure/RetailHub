@@ -18,7 +18,7 @@ const storeA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',storeB='bbbbbbbb-bbbb-4bbb-8
 let userStoreIds=[storeA],fileStore='a',folderMoved=false;
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let role='reader',disabled=false,published=true,oauthExchanges=0;
-let settings=new Map(),calls=[],createdFolders=new Map();
+let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
 const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,store_ids:userStoreIds}});
 const reply=(data,status=200)=>new Response(data===null?null:JSON.stringify(data),{status});
 globalThis.fetch=async(url,init={})=>{
@@ -41,6 +41,7 @@ globalThis.fetch=async(url,init={})=>{
  return reply([...settings].map(([key,value])=>({key,value})));
  }
  if(u.pathname==='/rest/v1/rh_stores'){
+ if(init.method==='PATCH'){const id=u.searchParams.get('id')?.slice(3);const store=storeRows.find(v=>v.id===id);assert.ok(store);Object.assign(store,JSON.parse(init.body));return reply(null,204);}
  if(init.method==='POST'){const d=JSON.parse(init.body);const found=storeRows.find(v=>v.dropbox_id===d.dropbox_id);if(found)Object.assign(found,d);else storeRows.push({...d,id:crypto.randomUUID(),enabled:true});return reply([found||storeRows.at(-1)]);}
  let rows=[...storeRows];const ids=u.searchParams.get('id');if(ids?.startsWith('eq.'))rows=rows.filter(v=>v.id===ids.slice(3));if(ids?.startsWith('in.'))rows=rows.filter(v=>ids.slice(4,-1).split(',').includes(v.id));if(u.searchParams.get('enabled')==='eq.true')rows=rows.filter(v=>v.enabled);return reply(rows);
  }
@@ -60,10 +61,17 @@ globalThis.fetch=async(url,init={})=>{
  }
  if(u.pathname==='/2/files/get_metadata'){
  const path=JSON.parse(init.body).path;
- if(path==='id:pdf')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda '+fileStore+'/planogramas/prueba á.pdf'});
- const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path.toLowerCase());if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
+ if(path==='id:pdf')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:(folderOverrides.get('id:store-'+fileStore)?.path_lower||'/retail hub/portal/tienda '+fileStore)+'/planogramas/prueba á.pdf'});
+ const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path.toLowerCase());if(store&&folderOverrides.has(store.dropbox_id))return reply(folderOverrides.get(store.dropbox_id));if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
  if(createdFolders.has(path.toLowerCase()))return reply({...createdFolders.get(path.toLowerCase()),'.tag':'folder'});
  throw Error('Unexpected metadata path: '+path);
+ }
+ if(u.pathname==='/2/files/move_v2'){
+ const b=JSON.parse(init.body);assert.equal(b.autorename,false);assert.ok(b.from_path.startsWith('id:'));
+ const store=storeRows.find(v=>v.dropbox_id===b.from_path);assert.ok(store);const current=folderOverrides.get(store.dropbox_id)||{'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name};
+ if(b.to_path===failNextMoveTo){failNextMoveTo='';return reply({error_summary:'to/conflict/folder/'},409);}
+ if(current.path_lower===b.to_path.toLowerCase()||storeRows.some(v=>v.dropbox_id!==store.dropbox_id&&v.path_lower===b.to_path.toLowerCase()))return reply({error_summary:'to/conflict/folder/'},409);
+ const metadata={...current,name:b.to_path.split('/').at(-1),path_lower:b.to_path.toLowerCase(),path_display:b.to_path};folderOverrides.set(store.dropbox_id,metadata);return reply({metadata});
  }
  if(u.pathname==='/2/files/list_folder')return reply({entries:[{'.tag':'folder',id:'id:store-a',name:'Tienda A',path_lower:'/retail hub/portal/tienda a',path_display:'/Retail Hub/Portal/Tienda A'},{'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'}],has_more:false});
  if(u.pathname==='/2/files/upload_session/start')return reply({session_id:'upload-id'});
@@ -177,6 +185,45 @@ await check('new readers default to zero stores and invalid assignments cannot c
 });
 await check('editable user metadata cannot grant stores or admin permissions',async()=>{
  role='reader';userStoreIds=[];assert.deepEqual((await (await request('stores')).json()).stores,[]);assert.equal((await request('stores',{method:'POST',body:{name:'Fake'}})).status,403);assert.equal((await request('documents?store='+storeB)).status,404);userStoreIds=[storeA];role='admin';
+});
+await check('only admins can rename stores',async()=>{
+ role='reader';assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name:'New name'}})).status,403);assert.equal((await request('stores/'+storeA,{method:'PATCH',token:null,body:{name:'New name'}})).status,401);role='admin';
+});
+await check('renaming a store updates Dropbox and catalog while keeping ID, permissions and file tickets',async()=>{
+ role='reader';const ticket=await (await request('documents/'+id+'/link',{method:'POST'})).json();role='admin';const permissions=[...userStoreIds],at=calls.length;
+ const r=await request('stores/'+storeA,{method:'PATCH',body:{name:'BK Martín Carrera Norte'}});assert.equal(r.status,200);const data=await r.json();assert.equal(data.store.id,storeA);assert.equal(data.store.name,'BK Martín Carrera Norte');assert.equal(storeRows[0].path_lower,'/retail hub/portal/bk martín carrera norte');assert.deepEqual(userStoreIds,permissions);assert.ok(!calls.slice(at).some(v=>v.url.includes('/admin/users')||v.url.includes('/rh_documents')));
+ role='reader';assert.equal((await request(ticket.url.split('retailhub-api/')[1],{token:null})).status,200);assert.equal((await request('documents?store='+storeA)).status,200);role='admin';assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name:'Tienda A'}})).status,200);
+});
+await check('rename rejects invalid names and existing destination folders without changing the store',async()=>{
+ for(const name of ['', '../escape', 'Bad/Name', 'x'.repeat(101)])assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name}})).status,400);
+ assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name:'Tienda B'}})).status,409);assert.equal(storeRows[0].name,'Tienda A');
+});
+await check('case-only rename uses an intermediate path and keeps the same folder and permissions',async()=>{
+ const at=calls.length;const r=await request('stores/'+storeA,{method:'PATCH',body:{name:'TIENDA A'}});assert.equal(r.status,200);assert.equal((await r.json()).store.id,storeA);const moves=calls.slice(at).filter(v=>new URL(v.url).pathname==='/2/files/move_v2');assert.equal(moves.length,2);assert.ok(JSON.parse(moves[0].init.body).to_path.includes('/.rh-rename-'));assert.equal(storeRows[0].name,'TIENDA A');assert.ok(userStoreIds.includes(storeA));assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name:'Tienda A'}})).status,200);
+});
+await check('case-only rename restores the original folder name if the final move fails',async()=>{
+ failNextMoveTo='/Retail Hub/Portal/TIENDA A';const r=await request('stores/'+storeA,{method:'PATCH',body:{name:'TIENDA A'}});assert.equal(r.status,409);assert.equal(folderOverrides.get('id:store-a').name,'Tienda A');assert.equal(storeRows[0].name,'Tienda A');
+});
+await check('saving an unchanged name avoids Dropbox moves and advertises both admin features',async()=>{
+ const at=calls.length;assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name:'Tienda A'}})).status,200);assert.ok(!calls.slice(at).some(v=>new URL(v.url).pathname==='/2/files/move_v2'));const status=await (await request('status',{token:null})).json();assert.equal(status.features.editStores,true);assert.equal(status.features.deleteStores,true);
+});
+await check('store deletion requires admin authority and exact name confirmation',async()=>{
+ role='reader';assert.equal((await request('stores/'+storeA,{method:'DELETE',body:{confirm_name:'Tienda A'}})).status,403);assert.equal((await request('stores/'+storeA,{method:'DELETE',token:null,body:{confirm_name:'Tienda A'}})).status,401);
+ role='admin';const at=calls.length;assert.equal((await request('stores/'+storeA,{method:'DELETE',body:{confirm_name:'Wrong'}})).status,400);assert.ok(!calls.slice(at).some(v=>v.init.method==='PATCH'));assert.equal(storeRows[0].enabled,true);
+});
+await check('retiring a store blocks readers, administrators and existing file tickets while preserving Dropbox files',async()=>{
+ const link=await (await request('documents/'+id+'/link',{method:'POST'})).json();assert.ok(link.url);const at=calls.length;
+ const result=await request('stores/'+storeA,{method:'DELETE',body:{confirm_name:'Tienda A'}});assert.equal(result.status,200);assert.equal(storeRows[0].enabled,false);
+ assert.ok(!calls.slice(at).some(v=>v.url.includes('dropboxapi.com')));assert.ok(!calls.slice(at).some(v=>v.url.includes('rh_documents')));
+ for(const nextRole of ['reader','admin']){role=nextRole;assert.ok(!(await (await request('stores')).json()).stores.some(v=>v.id===storeA));assert.equal((await request('documents?store='+storeA)).status,404);assert.equal((await request('documents/'+id+'/link',{method:'POST'})).status,404);assert.equal((await request(link.url.split('retailhub-api/')[1],{token:null})).status,404);}
+ assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name:'Revive'}})).status,404);
+ assert.equal((await request('upload/start',{method:'POST',body:{filename:'test.pdf',category:'General',store_id:storeA}})).status,404);
+ assert.equal((await request('users/'+otherId,{method:'PATCH',body:{store_ids:[storeA]}})).status,400);
+});
+await check('sync and create with the same folder cannot reactivate a retired store or restore former grants',async()=>{
+ role='admin';assert.equal((await request('sync',{method:'POST',body:{}})).status,200);assert.equal(storeRows[0].enabled,false);
+ assert.equal((await request('stores',{method:'POST',body:{name:'Tienda A'}})).status,409);assert.equal(storeRows[0].enabled,false);assert.ok(!(await (await request('stores')).json()).stores.some(v=>v.id===storeA));
+ storeRows[0].enabled=true; // Reset the isolated mock fixture for subsequent compatibility checks.
 });
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'store-folder-fix-1';
+const API_BUILD = 'store-manage-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -86,7 +86,7 @@ export const headerJSON=(x:unknown)=>JSON.stringify(x).replace(/[\u007f-\uffff]/
 export async function dbx(path:string,args:any){
  const r=await fetch('https://api.dropboxapi.com/2/'+path,{method:'POST',headers:{Authorization:'Bearer '+await dbxToken(),'Content-Type':'application/json'},body:JSON.stringify(args)});
  const d=await r.json().catch(()=>({})) as any;
- if(!r.ok){if(r.status===429)throw new PortalError(429,'Dropbox está ocupado. Intenta de nuevo en unos minutos.');throw new PortalError(400,d.error_summary?.includes('not_found')?'No se encontró la carpeta o el documento en Dropbox.':'Dropbox no pudo completar la operación.');}return d;
+ if(!r.ok){if(r.status===429)throw new PortalError(429,'Dropbox está ocupado. Intenta de nuevo en unos minutos.');if(d.error_summary?.includes('conflict'))throw new PortalError(409,'Ya existe una carpeta o archivo con ese nombre en Dropbox.');throw new PortalError(400,d.error_summary?.includes('not_found')?'No se encontró la carpeta o el documento en Dropbox.':'Dropbox no pudo completar la operación.');}return d;
 }
 export async function content(path:string,args:any,body:BodyInit|null=null,range?:string){
  const h:Record<string,string>={Authorization:'Bearer '+await dbxToken(),'Dropbox-API-Arg':headerJSON(args),'Content-Type':'application/octet-stream'};
@@ -96,6 +96,7 @@ export async function content(path:string,args:any,body:BodyInit|null=null,range
 }
 const uuid=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(v);
 function storeIds(u:any):string[]{return Array.isArray(u?.app_metadata?.store_ids)?[...new Set((u.app_metadata.store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
+function validStoreName(value:unknown){const name=typeof value==='string'?value.trim().normalize('NFC'):'';if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');return name;}
 const safeStore=(s:any)=>({id:s.id,name:s.name,enabled:s.enabled});
 function folderIsStore(e:any){const root=config().root.toLowerCase()+'/';return e?.['.tag']==='folder'&&String(e.path_lower||'').startsWith(root)&&!String(e.path_lower).slice(root.length).includes('/');}
 async function saveStoreFolder(e:any){
@@ -106,7 +107,7 @@ async function requireStore(id:unknown,user:any){
  if(!uuid(id))throw new PortalError(404,'Tienda no disponible.');
  if(user.app_metadata.role!=='admin'&&!storeIds(user).includes(id))throw new PortalError(404,'Tienda no disponible.');
  const rows=await supa('/rest/v1/rh_stores?id=eq.'+id+'&select=id,name,dropbox_id,path_lower,enabled');const store=rows[0];
- if(!store||(user.app_metadata.role!=='admin'&&!store.enabled))throw new PortalError(404,'Tienda no disponible.');return store;
+ if(!store||!store.enabled)throw new PortalError(404,'Tienda no disponible.');return store;
 }
 async function validateStoreIds(value:unknown){
  if(!Array.isArray(value)||value.length>100||value.some(v=>!uuid(v)))throw new PortalError(400,'Selecciona tiendas válidas (hasta 100 por usuario).');
@@ -172,7 +173,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -209,15 +210,34 @@ export async function handle(r:Request){
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
  if(route==='stores'&&method==='GET'){
  const ids=storeIds(user);if(user.app_metadata.role!=='admin'&&!ids.length)return json({stores:[]});
- const filter=user.app_metadata.role==='admin'?'':'&enabled=eq.true&id=in.('+ids.join(',')+')';
- return json({stores:(await supa('/rest/v1/rh_stores?select=id,name,enabled&order=name.asc&limit=1000'+filter)).map(safeStore)});}
+ const filter=user.app_metadata.role==='admin'?'':'&id=in.('+ids.join(',')+')';
+ return json({stores:(await supa('/rest/v1/rh_stores?select=id,name,enabled&enabled=eq.true&order=name.asc&limit=1000'+filter)).map(safeStore)});}
  if(route==='stores'&&method==='POST'){
- await requireUser(r,true);const b=await bodyJSON(r);const name=typeof b.name==='string'?b.name.trim().normalize('NFC'):'';
- if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');
+ await requireUser(r,true);const b=await bodyJSON(r);const name=validStoreName(b.name);
  const path=config().root+'/'+name;let folder;
  // create_folder_v2 returns concrete FolderMetadata, without the union .tag.
  try{folder={...(await dbx('files/create_folder_v2',{path,autorename:false})).metadata,'.tag':'folder'};}catch{folder=await dbx('files/get_metadata',{path});}
- return json({store:safeStore(await saveStoreFolder(folder))},201);}
+ const store=await saveStoreFolder(folder);if(!store.enabled)throw new PortalError(409,'La carpeta pertenece a una tienda retirada del portal. Usa otro nombre.');return json({store:safeStore(store)},201);}
+ if(p[0]==='stores'&&p.length===2&&method==='PATCH'){
+ await requireUser(r,true);const store=await requireStore(p[1],user);const b=await bodyJSON(r);const name=validStoreName(b.name);let folder=await liveFolder(store);
+ if(folder.name!==name){
+ const target=config().root+'/'+name;const original=folder.path_display;
+ // Dropbox does not support case-only moves. Use a unique intermediate folder
+ // name in the same root, and restore the original name if the second move fails.
+ const caseOnly=folder.path_lower===target.toLowerCase();
+ if(caseOnly)await dbx('files/move_v2',{from_path:store.dropbox_id,to_path:config().root+'/.rh-rename-'+crypto.randomUUID(),autorename:false});
+ try{await dbx('files/move_v2',{from_path:store.dropbox_id,to_path:target,autorename:false});}
+ catch(error){if(caseOnly)await dbx('files/move_v2',{from_path:store.dropbox_id,to_path:original,autorename:false}).catch(()=>{});throw error;}
+ folder=await liveFolder(store);
+ }
+ const updated=await saveStoreFolder(folder);if(!updated.enabled)throw new PortalError(404,'Tienda no disponible.');return json({store:safeStore(updated)});}
+ if(p[0]==='stores'&&p.length===2&&method==='DELETE'){
+ await requireUser(r,true);const store=await requireStore(p[1],user);const b=await bodyJSON(r);
+ if(b.confirm_name!==store.name)throw new PortalError(400,'Escribe el nombre exacto de la tienda para confirmar.');
+ // Retire from the portal, never delete Dropbox content. Sync omits enabled and
+ // therefore cannot republish this store or reactivate its former assignments.
+ await supa('/rest/v1/rh_stores?id=eq.'+store.id,{method:'PATCH',body:JSON.stringify({enabled:false,updated_at:new Date().toISOString()})});
+ return json({ok:true});}
  if(route==='documents'&&method==='GET'){
  const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});await requireStore(id,user);
  const fields='id,title,filename,category,size,modified_at,published,store_id';

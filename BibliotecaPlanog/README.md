@@ -65,8 +65,22 @@ La tabla privada `rh_stores` registra las carpetas. `rh_documents.store_id` asoc
 
 Los tickets del visor son enlaces de acceso temporal de 15 minutos vinculados al usuario que los generó: quien posea el enlace puede usarlo durante su vigencia mientras ese usuario siga autorizado. Revocar el permiso, ocultar el documento o desactivar la cuenta bloquea solicitudes nuevas. No es posible retirar un PDF que ya fue descargado.
 
-Se comprobaron 39 casos de autorización e integración con servicios simulados, además de compilación y tipos del frontend/servidor. La ejecución del SQL y la prueba con las cuentas reales se hacen durante la activación. La transmisión de PDF sigue consumiendo transferencia de Supabase; dividir por tiendas no cambia esa cuota.
+Se comprobaron 48 casos de autorización e integración con servicios simulados, además de compilación y tipos del frontend/servidor. La ejecución del SQL y la prueba con las cuentas reales se hacen durante la activación. La transmisión de PDF sigue consumiendo transferencia de Supabase; dividir por tiendas no cambia esa cuota.
 
 ### Corrección de creación de carpetas
 
 El build `store-folder-fix-1` normaliza la respuesta concreta de `files/create_folder_v2`, que devuelve FolderMetadata sin el discriminador `.tag` usado en los listados. Conserva la comprobación de que la carpeta esté inmediatamente bajo Portal. La repetición con el mismo nombre reutiliza la carpeta y la tienda existentes. Incluye pruebas para respuestas sin `.tag`, carpetas ya creadas y nombres con acentos. Solo requiere volver a desplegar la función, sin SQL adicional ni cambios de secretos.
+
+### Eliminar una tienda del portal
+
+El build `store-manage-1` añade un botón administrador **Eliminar del portal** en cada tarjeta de tienda. Exige escribir el nombre exacto de la tienda. Retira la tienda con `enabled=false`; conserva los documentos y las carpetas originales de Dropbox. También bloquea enlaces y subidas para administradores y lectores. Las copias ya descargadas permanecen en poder de sus usuarios.
+
+La sincronización conserva `enabled=false`, y crear una tienda con la misma carpeta devuelve un conflicto: no restablece accesos anteriores automáticamente. Las antiguas referencias en metadata de usuarios no conceden acceso mientras la tienda esté retirada; al editar un usuario la interfaz excluye esas asignaciones inactivas. No requiere más SQL. Volver a desplegar la función y actualizar la página. El endpoint `/status` anuncia `features.deleteStores=true`; el botón se habilita tras detectar esa capacidad. Se comprobaron 48 casos con servicios simulados, incluida la retirada, sus permisos y la no reactivación al sincronizar.
+
+### Editar una tienda
+
+La tarjeta de cada tienda tiene un botón administrador **Editar**. Cambia su nombre tanto en Dropbox como en el catálogo, conservando su UUID, la identidad de la carpeta, los documentos y las asignaciones de usuarios. Se rechazan nombres inválidos y destinos ocupados; no se sobrescribe ni se mezcla otra tienda. El servidor usa el identificador de la carpeta al moverla.
+
+Dropbox no admite renombrar cambiando únicamente mayúsculas/minúsculas en una sola llamada. Para ese caso se usa un nombre intermedio único dentro de Portal y se intenta restaurar el original si falla el segundo movimiento. Si Dropbox acepta un cambio pero falla la actualización de la base, sincronizar permite recuperar el nombre actual mediante la identidad estable de la carpeta.
+
+El build `store-manage-1` anuncia `features.editStores=true` y `features.deleteStores=true`. La interfaz habilita los botones correspondientes solo después de detectar esas capacidades. Aplicar la función y refrescar con Ctrl+F5; no requiere SQL adicional. Las 48 comprobaciones usan servicios simulados; la operación real se prueba después del despliegue.
