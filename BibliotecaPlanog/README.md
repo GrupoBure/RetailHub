@@ -36,3 +36,11 @@ Subidas en bloques de 8 MiB mediante sesiones de Dropbox. La subida no comprime 
 `index.html`, `config.js` y `assets/`: publicación compilada. `source/`: React/Vite editable. `server/`: función y comprobaciones. Para compilar el frontend: instalar dependencias en `source/` y ejecutar `npm run build`. Copiar su `dist/` a la carpeta publicada, conservando la configuración real del servidor.
 
 Desde `source/`, con TypeScript instalado: `node ../server/test-api.mjs`. Las comprobaciones usan dobles de Supabase y Dropbox; no prueban credenciales ni conectividad reales. Cubren acceso anónimo/inhabilitado, privilegios, publicación, tickets vencidos, streaming parcial, OAuth de un solo uso, cifrado del token y ambas clases de claves Supabase.
+
+## Administración de usuarios
+
+Los administradores pueden editar nombre, usuario de ingreso y permisos, activar/desactivar, asignar una contraseña nueva y eliminar una cuenta con confirmación escrita del usuario. El servidor impide eliminar, desactivar o degradar la cuenta propia. La eliminación afecta a Supabase Auth; conserva los PDF y el catálogo. Los lectores no pueden usar estas operaciones.
+
+Las contraseñas actuales no se consultan ni se guardan en texto recuperable. El botón de ojo solo muestra la contraseña nueva mientras se escribe al crear/restablecer una cuenta. Al guardar, se envía únicamente a Supabase Auth y no se devuelve ni se almacena en el catálogo o en el navegador.
+
+Para aplicar esta versión, reemplazar el código de la función existente `retailhub-api` por `server/retailhub-api.ts` y volver a desplegar. Conservar los secretos existentes y Verify JWT desactivado. `GET /status` debe devolver `version: "2026-10-24-users"`. Hasta entonces la interfaz deshabilita los botones nuevos de editar/eliminar para evitar operaciones contra una versión anterior. No requiere cambios SQL ni volver a autorizar Dropbox.

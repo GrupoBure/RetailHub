@@ -2,13 +2,14 @@
 // No credentials belong in this file. Deploy with gateway Verify JWT OFF;
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
+const API_VERSION = '2026-10-24-users';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
  const old=Deno.env.get(legacy); if(old)return old;
  try {return JSON.parse(Deno.env.get(name)||'{}').default;} catch {return undefined;}
 }
-const cors={'Access-Control-Allow-Origin':ORIGIN,'Access-Control-Allow-Methods':'GET,POST,PATCH,OPTIONS',
+const cors={'Access-Control-Allow-Origin':ORIGIN,'Access-Control-Allow-Methods':'GET,POST,PATCH,DELETE,OPTIONS',
  'Access-Control-Allow-Headers':'authorization,content-type,x-upload-ticket,x-upload-offset,range',
  'Access-Control-Expose-Headers':'content-range,content-length,content-disposition','Vary':'Origin'};
 
@@ -46,6 +47,7 @@ export async function supa(path:string,init:RequestInit={},bearer?:string):Promi
  if(!r.ok){const e=await r.json().catch(()=>({})) as any;
  if(r.status===429)throw new PortalError(429,'Demasiados intentos. Espera unos minutos y vuelve a intentar.');
  if(r.status===401||r.status===403)throw new PortalError(401,'La sesión no es válida. Vuelve a iniciar sesión.');
+ if(e.code==='email_exists'||e.code==='email_conflict'||e.code==='user_already_exists')throw new PortalError(409,'Ese nombre de usuario ya está en uso. Elige otro.');
  if(e.code==='42P01'||e.code==='PGRST205')throw new PortalError(503,'Falta preparar la base de datos. Revisa Conexiones.');
  throw new PortalError(400,'No se pudo completar la operación en la cuenta de usuarios.');}
  const text=await r.text();return text?JSON.parse(text):null;
@@ -138,7 +140,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -201,12 +203,21 @@ export async function handle(r:Request){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
  const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false}})});
  return json({user:safeUser(u)},201);}
- if(p[0]==='users'&&p[1]&&method==='PATCH'){
+ if(p[0]==='users'&&p.length===2&&(method==='PATCH'||method==='DELETE')){
  if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Usuario no encontrado.');
- const b:any=await bodyJSON(r);const target=await supa('/auth/v1/admin/users/'+p[1]);if(!target.app_metadata?.rh_portal)throw new PortalError(404,'Usuario no encontrado.');
- if(user.id===p[1]&&b.enabled===false)throw new PortalError(400,'No puedes desactivar tu propio acceso.');
- const changes:any={};if(typeof b.enabled==='boolean')changes.app_metadata={...target.app_metadata,disabled:!b.enabled};
- if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de al menos 12 caracteres.');changes.password=b.password;}
+ const target=await supa('/auth/v1/admin/users/'+p[1]);if(!target.app_metadata?.rh_portal)throw new PortalError(404,'Usuario no encontrado.');
+ const b:any=await bodyJSON(r);
+ if(method==='DELETE'){
+ if(user.id===p[1])throw new PortalError(400,'No puedes eliminar tu propio acceso.');
+ if(b.confirm_username!==target.email?.split('@')[0])throw new PortalError(400,'Escribe el usuario exacto para confirmar la eliminación.');
+ await supa('/auth/v1/admin/users/'+p[1],{method:'DELETE',body:JSON.stringify({should_soft_delete:false})});return json({ok:true});}
+ if(user.id===p[1]&&(b.enabled===false||(b.role!==undefined&&b.role!=='admin')))throw new PortalError(400,'No puedes desactivar tu acceso ni quitarte el permiso de administrador.');
+ const changes:any={};
+ if(b.username!==undefined){const nextEmail=email(b.username);if(nextEmail!==target.email){changes.email=nextEmail;changes.email_confirm=true;}}
+ if(b.name!==undefined){if(typeof b.name!=='string'||!b.name.trim()||b.name.trim().length>100)throw new PortalError(400,'Escribe un nombre de hasta 100 caracteres.');changes.user_metadata={...target.user_metadata,name:b.name.trim()};}
+ if(b.role!==undefined&&b.role!=='admin'&&b.role!=='reader')throw new PortalError(400,'Permisos no válidos.');
+ if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...target.app_metadata,...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
+ if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de entre 12 y 256 caracteres.');changes.password=b.password;}
  if(!Object.keys(changes).length)throw new PortalError(400,'No hay cambios para guardar.');
  const u=await supa('/auth/v1/admin/users/'+p[1],{method:'PUT',body:JSON.stringify(changes)});return json({user:safeUser(u)});}
  if(p[0]==='upload'&&method==='POST'){

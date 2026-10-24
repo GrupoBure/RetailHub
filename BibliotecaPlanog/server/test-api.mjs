@@ -10,6 +10,9 @@ const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarge
 assert.equal(compiled.diagnostics.length,0);
 await import('data:text/javascript;base64,'+Buffer.from(compiled.outputText).toString('base64'));
 const id='11111111-1111-4111-8111-111111111111';
+const otherId='33333333-3333-4333-8333-333333333333';
+let target={id:otherId,email:'lector@usuarios.retailhub.invalid',user_metadata:{name:'Lector',department:'Montaje'},app_metadata:{rh_portal:true,role:'reader',disabled:false,custom_flag:'keep'}};
+let targetDeleted=false;
 const uid='22222222-2222-4222-8222-222222222222';
 let role='reader',disabled=false,published=true,oauthExchanges=0;
 let settings=new Map(),calls=[];
@@ -19,7 +22,13 @@ globalThis.fetch=async(url,init={})=>{
  url=String(url);calls.push({url,init});const u=new URL(url);
  if(u.pathname==='/auth/v1/user')return new Headers(init.headers).get('authorization')==='Bearer valid'?reply(user()):reply({},401);
  if(u.pathname==='/auth/v1/token')return reply({user:user(),access_token:'valid',refresh_token:'rotated',expires_in:3600});
- if(u.pathname.startsWith('/auth/v1/admin/users/'))return reply(user());
+ if(u.pathname.startsWith('/auth/v1/admin/users/')){
+ const targetId=u.pathname.split('/').at(-1);if(targetId===uid)return reply(user());
+ if(targetDeleted||targetId!==otherId)return reply({},404);
+ if(init.method==='DELETE'){targetDeleted=true;return reply(target);}
+ if(init.method==='PUT'){const change=JSON.parse(init.body);if(change.email==='duplicado@usuarios.retailhub.invalid')return reply({code:'email_exists'},422);target={...target,...change};return reply(target);}
+ return reply(target);
+ }
  if(u.pathname==='/rest/v1/rh_settings'){
  const key=u.searchParams.get('key')?.slice(3);
  if(init.method==='POST'){const d=JSON.parse(init.body);settings.set(d.key,d.value);return reply(null,201);}
@@ -63,5 +72,31 @@ await check('admin upload accepts PDF chunks and commits metadata; invalid first
  const saved=JSON.parse(calls.at(-1).init.body);assert.equal(saved.filename,'Prueba á.pdf');assert.equal(saved.category,'Planogramas');assert.equal(saved.published,undefined);
 });
 await check('Dropbox OAuth validates state, consumes it once and encrypts refresh token',async()=>{const r=await request('dropbox/connect',{method:'POST'});assert.equal(r.status,200);const state=new URL((await r.json()).url).searchParams.get('state');const callback='dropbox/callback?code=example&state='+encodeURIComponent(state);assert.equal((await request('dropbox/callback?code=example&state=fake',{token:null})).status,403);const result=await request(callback,{token:null});assert.equal(result.status,302);assert.equal(result.headers.get('location'),'https://grupobure.github.io/RetailHub/BibliotecaPlanog/?conexion=dropbox');assert.notEqual(settings.get('dropbox_refresh'),'private-dbx-refresh');assert.equal((await request(callback,{token:null})).status,403);assert.equal(oauthExchanges,1);});
+await check('anonymous, reader and disabled admin cannot edit or delete users',async()=>{
+ role='reader';for(const method of ['PATCH','DELETE']){assert.equal((await request('users/'+otherId,{method,body:{name:'X',confirm_username:'lector'}})).status,403);assert.equal((await request('users/'+otherId,{method,token:null,body:{}})).status,401);}
+ role='admin';disabled=true;assert.equal((await request('users/'+otherId,{method:'DELETE',body:{confirm_username:'lector'}})).status,403);disabled=false;
+});
+await check('editing updates username, name and role while preserving metadata and password',async()=>{
+ const r=await request('users/'+otherId,{method:'PATCH',body:{name:'Coordinador',username:'coordinador.01',role:'admin'}});assert.equal(r.status,200);const data=await r.json();assert.equal(data.user.username,'coordinador.01');assert.equal(data.user.name,'Coordinador');assert.equal(data.user.role,'admin');assert.equal(target.email_confirm,true);assert.equal(target.user_metadata.department,'Montaje');assert.equal(target.app_metadata.custom_flag,'keep');assert.equal(target.app_metadata.rh_portal,true);assert.ok(!('password' in JSON.parse(calls.at(-1).init.body)));assert.ok(!('password' in data.user));
+});
+await check('invalid names, usernames and roles cannot modify a user',async()=>{
+ for(const body of [{name:'   '},{name:'x'.repeat(101)},{username:'../bad'},{role:'owner'}])assert.equal((await request('users/'+otherId,{method:'PATCH',body})).status,400);
+});
+await check('duplicate usernames return a clear conflict response',async()=>assert.equal((await request('users/'+otherId,{method:'PATCH',body:{username:'duplicado'}})).status,409));
+await check('admin cannot delete, disable or demote their own account',async()=>{
+ for(const [method,body] of [['DELETE',{confirm_username:'victor'}],['PATCH',{enabled:false}],['PATCH',{role:'reader'}]])assert.equal((await request('users/'+uid,{method,body})).status,400);
+});
+await check('password reset validates length and does not return the password',async()=>{
+ assert.equal((await request('users/'+otherId,{method:'PATCH',body:{password:'short'}})).status,400);
+ const r=await request('users/'+otherId,{method:'PATCH',body:{password:'new-test-password'}});assert.equal(r.status,200);assert.ok(!(await r.text()).includes('new-test-password'));assert.equal(target.password,'new-test-password');
+});
+await check('non-portal accounts cannot be edited or deleted',async()=>{
+ target.app_metadata.rh_portal=false;for(const method of ['PATCH','DELETE'])assert.equal((await request('users/'+otherId,{method,body:{name:'X',confirm_username:'coordinador.01'}})).status,404);target.app_metadata.rh_portal=true;
+});
+await check('delete requires matching username and preserves documents',async()=>{
+ let at=calls.length;assert.equal((await request('users/'+otherId,{method:'DELETE',body:{confirm_username:'wrong'}})).status,400);assert.ok(!calls.slice(at).some(c=>c.init.method==='DELETE'));assert.equal(targetDeleted,false);
+ at=calls.length;assert.equal((await request('users/'+otherId,{method:'DELETE',body:{confirm_username:'coordinador.01'}})).status,200);assert.equal(targetDeleted,true);assert.ok(!calls.slice(at).some(c=>c.url.includes('rh_documents')));
+});
+await check('CORS preflight supports DELETE',async()=>{const r=await request('users/'+otherId,{method:'OPTIONS',token:null});assert.ok(r.headers.get('access-control-allow-methods').includes('DELETE'));});
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents');const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);
