@@ -8,14 +8,14 @@ let handler;globalThis.Deno={env:{get:key=>environment[key]},serve:fn=>{handler=
 const source=readFileSync(new URL('./retailhub-api.ts',import.meta.url),'utf8');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext},reportDiagnostics:true});
 assert.equal(compiled.diagnostics.length,0);
-await import('data:text/javascript;base64,'+Buffer.from(compiled.outputText).toString('base64'));
+const apiModule=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputText).toString('base64'));
 const id='11111111-1111-4111-8111-111111111111';
 const otherId='33333333-3333-4333-8333-333333333333';
 let target={id:otherId,email:'lector@usuarios.retailhub.invalid',user_metadata:{name:'Lector',department:'Montaje'},app_metadata:{rh_portal:true,role:'reader',disabled:false,custom_flag:'keep'}};
 let targetDeleted=false;
 const uid='22222222-2222-4222-8222-222222222222';
 const storeA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',storeB='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-let userStoreIds=[storeA],fileStore='a',folderMoved=false;
+let userStoreIds=[storeA],fileStore='a',folderMoved=false,currentFilename='Prueba á.pdf',currentSection='Planogramas',catalogOverride=null;
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let role='reader',disabled=false,published=true,oauthExchanges=0;
 let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
@@ -48,7 +48,7 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/rest/v1/rh_documents'){
  if(init.method==='POST')return reply(null,201);
  const selected=u.searchParams.get('store_id');if(selected&&selected!=='eq.'+storeA)return reply([]);
- return reply([{id,store_id:storeA,dropbox_id:'id:pdf',filename:'Prueba á.pdf',published}]);}
+ return reply(catalogOverride||[{id,store_id:storeA,dropbox_id:'id:pdf',filename:currentFilename,category:currentSection,published}]);}
  if(u.pathname==='/oauth2/token'){
  const body=new URLSearchParams(init.body);if(body.get('grant_type')==='authorization_code'){oauthExchanges++;return reply({refresh_token:'private-dbx-refresh'});}return reply({access_token:'private-dbx-token',expires_in:14400});
  }
@@ -61,7 +61,7 @@ globalThis.fetch=async(url,init={})=>{
  }
  if(u.pathname==='/2/files/get_metadata'){
  const path=JSON.parse(init.body).path;
- if(path==='id:pdf')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:(folderOverrides.get('id:store-'+fileStore)?.path_lower||'/retail hub/portal/tienda '+fileStore)+'/planogramas/prueba á.pdf'});
+ if(path==='id:pdf')return reply({'.tag':'file',id:'id:pdf',name:currentFilename,path_lower:(folderOverrides.get('id:store-'+fileStore)?.path_lower||'/retail hub/portal/tienda '+fileStore)+'/'+currentSection.toLowerCase()+'/'+currentFilename.toLowerCase()});
  const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path.toLowerCase());if(store&&folderOverrides.has(store.dropbox_id))return reply(folderOverrides.get(store.dropbox_id));if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
  if(createdFolders.has(path.toLowerCase()))return reply({...createdFolders.get(path.toLowerCase()),'.tag':'folder'});
  throw Error('Unexpected metadata path: '+path);
@@ -76,11 +76,13 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/2/files/list_folder')return reply({entries:[{'.tag':'folder',id:'id:store-a',name:'Tienda A',path_lower:'/retail hub/portal/tienda a',path_display:'/Retail Hub/Portal/Tienda A'},{'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'}],has_more:false});
  if(u.pathname==='/2/files/upload_session/start')return reply({session_id:'upload-id'});
  if(u.pathname==='/2/files/upload_session/append_v2')return reply(null,200);
- if(u.pathname==='/2/files/upload_session/finish')return reply({'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
+ if(u.pathname==='/2/files/upload_session/finish'){
+ const path=JSON.parse(new Headers(init.headers).get('Dropbox-API-Arg')).commit.path;return reply({'.tag':'file',id:'id:pdf',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path,size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
+ }
  if(u.pathname==='/2/files/download'){const range=new Headers(init.headers).get('range');return new Response('%PDF-test',{status:range?206:200,headers:range?{'content-range':'bytes 0-8/9'}:{}});}
  throw Error('Unexpected mock request: '+url);
 };
-const request=(path,{method='GET',token='valid',body,headers={}}={})=>handler(new Request('https://project.supabase.co/functions/v1/retailhub-api/'+path,{method,headers:{Origin:'https://grupobure.github.io',...(token?{Authorization:'Bearer '+token}:{}),...headers},body:body===undefined?undefined:typeof body==='string'?body:JSON.stringify(body)}));
+const request=(path,{method='GET',token='valid',body,headers={}}={})=>handler(new Request('https://project.supabase.co/functions/v1/retailhub-api/'+path,{method,headers:{Origin:'https://grupobure.github.io',...(token?{Authorization:'Bearer '+token}:{}),...headers},body:body===undefined?undefined:typeof body==='string'||body instanceof Uint8Array?body:JSON.stringify(body)}));
 let checks=0;
 async function check(name,fn){await fn();checks++;console.log('PASS '+name);}
 await check('CORS preflight authorizes GitHub origin',async()=>{const r=await request('documents?store='+storeA,{method:'OPTIONS',token:null});assert.equal(r.status,204);assert.equal(r.headers.get('access-control-allow-origin'),'https://grupobure.github.io');});
@@ -166,7 +168,7 @@ await check('sync associates files to stable store IDs and preserves publication
  const r=await request('sync',{method:'POST',body:{}});assert.equal(r.status,200);const write=calls.filter(c=>new URL(c.url).pathname==='/rest/v1/rh_documents'&&c.init.method==='POST').at(-1);const row=JSON.parse(write.init.body)[0];assert.equal(row.store_id,storeA);assert.equal(row.category,'Planogramas');assert.equal(row.published,undefined);assert.ok(!calls.slice(-5).some(c=>c.url.includes('/admin/users')));
 });
 await check('upload requires a store and cannot use invalid store IDs',async()=>{
- for(const store_id of [undefined,'bad','dddddddd-dddd-4ddd-8ddd-dddddddddddd'])assert.equal((await request('upload/start',{method:'POST',body:{filename:'test.pdf',category:'General',store_id}})).status,404);
+ for(const store_id of [undefined,'bad','dddddddd-dddd-4ddd-8ddd-dddddddddddd'])assert.equal((await request('upload/start',{method:'POST',body:{filename:'test.pdf',category:'Planogramas',store_id}})).status,404);
 });
 await check('admin store creation creates a Dropbox folder without granting reader access',async()=>{
  const r=await request('stores',{method:'POST',body:{name:'Tienda nueva'}});assert.equal(r.status,201);const created=(await r.json()).store;assert.equal(created.name,'Tienda nueva');assert.ok(!userStoreIds.includes(created.id));assert.equal((await request('stores',{method:'POST',body:{name:'../escape'}})).status,400);
@@ -217,13 +219,53 @@ await check('retiring a store blocks readers, administrators and existing file t
  assert.ok(!calls.slice(at).some(v=>v.url.includes('dropboxapi.com')));assert.ok(!calls.slice(at).some(v=>v.url.includes('rh_documents')));
  for(const nextRole of ['reader','admin']){role=nextRole;assert.ok(!(await (await request('stores')).json()).stores.some(v=>v.id===storeA));assert.equal((await request('documents?store='+storeA)).status,404);assert.equal((await request('documents/'+id+'/link',{method:'POST'})).status,404);assert.equal((await request(link.url.split('retailhub-api/')[1],{token:null})).status,404);}
  assert.equal((await request('stores/'+storeA,{method:'PATCH',body:{name:'Revive'}})).status,404);
- assert.equal((await request('upload/start',{method:'POST',body:{filename:'test.pdf',category:'General',store_id:storeA}})).status,404);
+ assert.equal((await request('upload/start',{method:'POST',body:{filename:'test.pdf',category:'Planogramas',store_id:storeA}})).status,404);
  assert.equal((await request('users/'+otherId,{method:'PATCH',body:{store_ids:[storeA]}})).status,400);
 });
 await check('sync and create with the same folder cannot reactivate a retired store or restore former grants',async()=>{
  role='admin';assert.equal((await request('sync',{method:'POST',body:{}})).status,200);assert.equal(storeRows[0].enabled,false);
  assert.equal((await request('stores',{method:'POST',body:{name:'Tienda A'}})).status,409);assert.equal(storeRows[0].enabled,false);assert.ok(!(await (await request('stores')).json()).stores.some(v=>v.id===storeA));
  storeRows[0].enabled=true; // Reset the isolated mock fixture for subsequent compatibility checks.
+});
+await check('new stores automatically create exactly planogramas and listados with no reader grants',async()=>{
+ const r=await request('stores',{method:'POST',body:{name:'Tienda con secciones'}});assert.equal(r.status,201);const store=(await r.json()).store;const prefix='/retail hub/portal/tienda con secciones/';const children=[...createdFolders.keys()].filter(v=>v.startsWith(prefix));assert.deepEqual(children.sort(),[prefix+'listados',prefix+'planogramas']);assert.ok(!userStoreIds.includes(store.id));
+});
+await check('sync prepares fixed folders for existing stores without duplicates',async()=>{
+ const before=createdFolders.size;assert.equal((await request('sync',{method:'POST',body:{}})).status,200);assert.ok(createdFolders.has('/retail hub/portal/tienda a/planogramas'));assert.ok(createdFolders.has('/retail hub/portal/tienda a/listados'));assert.equal(createdFolders.size,before);
+});
+await check('catalog records accept only PDF in planogramas and native Excel in listados',async()=>{
+ const base={id:'id:doc',size:8,rev:'rev',server_modified:'2026-10-24T00:00:00Z'};const make=(folder,name)=>({...base,name,path_lower:('/Retail Hub/Portal/Tienda A/'+folder+'/'+name).toLowerCase(),path_display:'/Retail Hub/Portal/Tienda A/'+folder+'/'+name});
+ assert.equal((await apiModule.record(make('planogramas','Plano.PDF'))).category,'Planogramas');assert.equal((await apiModule.record(make('listados','Productos.XLSX'))).category,'Listados');assert.equal((await apiModule.record(make('listados','Productos.xls'))).category,'Listados');
+ for(const [folder,name] of [['planogramas','wrong.xlsx'],['listados','wrong.pdf'],['otros','wrong.pdf'],['listados','wrong.csv'],['listados','wrong.exe']])assert.equal(await apiModule.record(make(folder,name)),null);
+ assert.equal(await apiModule.record({...base,name:'root.pdf',path_lower:'/retail hub/portal/tienda a/root.pdf',path_display:'/Retail Hub/Portal/Tienda A/root.pdf'}),null);
+});
+await check('document listing filters legacy categories and mismatched file extensions',async()=>{
+ const common={id,store_id:storeA,published:true};catalogOverride=[{...common,filename:'a.pdf',category:'Planogramas'},{...common,filename:'b.xlsx',category:'Listados'},{...common,filename:'c.xls',category:'Listados'},{...common,filename:'bad.xlsx',category:'Planogramas'},{...common,filename:'bad.pdf',category:'Listados'},{...common,filename:'bad.exe',category:'Listados'},{...common,filename:'old.pdf',category:'General'}];
+ const d=await (await request('documents?store='+storeA)).json();assert.deepEqual(d.documents.map(v=>v.filename),['a.pdf','b.xlsx','c.xls']);catalogOverride=null;
+});
+await check('uploads reject files in the wrong section and unsupported extensions',async()=>{
+ for(const [filename,category] of [['a.pdf','Listados'],['a.xlsx','Planogramas'],['a.xls','General'],['a.csv','Listados'],['a.xlsx','../listados']])assert.equal((await request('upload/start',{method:'POST',body:{filename,category,store_id:storeA}})).status,400);
+});
+async function uploadExcel(filename,bytes){
+ const r=await request('upload/start',{method:'POST',body:{filename,category:'Listados',store_id:storeA}});assert.equal(r.status,200);const {ticket}=await r.json();const headers={'X-Upload-Ticket':ticket,'X-Upload-Offset':'0'};
+ assert.equal((await request('upload/chunk',{method:'POST',headers,body:bytes})).status,200);assert.equal((await request('upload/finish',{method:'POST',headers:{...headers,'X-Upload-Offset':String(bytes.length)},body:''})).status,200);
+ const row=JSON.parse(calls.at(-1).init.body);assert.equal(row.category,'Listados');assert.equal(row.store_id,storeA);assert.equal(row.filename,filename);
+}
+await check('XLSX uploads use listados and accept ZIP-format signatures',async()=>uploadExcel('Productos.xlsx',new Uint8Array([0x50,0x4b,0x03,0x04,1,2,3,4])));
+await check('XLS uploads use listados and accept compound-document signatures',async()=>uploadExcel('Productos.xls',new Uint8Array([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1,1])));
+await check('Excel uploads reject renamed PDF payloads',async()=>{
+ for(const filename of ['bad.xlsx','bad.xls']){const start=await request('upload/start',{method:'POST',body:{filename,category:'Listados',store_id:storeA}});assert.equal(start.status,200);const {ticket}=await start.json();assert.equal((await request('upload/chunk',{method:'POST',headers:{'X-Upload-Ticket':ticket,'X-Upload-Offset':'0'},body:'%PDF-fake'})).status,400);}
+});
+await check('Excel downloads have their real MIME type and always use attachment disposition',async()=>{
+ role='reader';for(const [filename,mime] of [['Productos.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],['Productos.xls','application/vnd.ms-excel']]){currentFilename=filename;currentSection='Listados';const r=await request('documents/'+id+'/file');assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),mime);assert.ok(r.headers.get('content-disposition').startsWith('attachment;'));}
+ currentFilename='Prueba á.pdf';currentSection='Planogramas';role='admin';
+});
+await check('wrong-folder files cannot be accessed through old links',async()=>{
+ for(const [name,section] of [['bad.xlsx','Planogramas'],['bad.pdf','Listados'],['bad.pdf','General']]){currentFilename=name;currentSection=section;assert.equal((await request('documents/'+id+'/file')).status,404);assert.equal((await request('documents/'+id+'/link',{method:'POST'})).status,404);}
+ currentFilename='Prueba á.pdf';currentSection='Planogramas';
+});
+await check('Excel tickets obey store permission revocation',async()=>{
+ role='reader';currentFilename='Productos.xlsx';currentSection='Listados';const link=await (await request('documents/'+id+'/link',{method:'POST'})).json();assert.ok(link.url);userStoreIds=[storeB];assert.equal((await request(link.url.split('retailhub-api/')[1],{token:null})).status,404);userStoreIds=[storeA];currentFilename='Prueba á.pdf';currentSection='Planogramas';role='admin';
 });
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

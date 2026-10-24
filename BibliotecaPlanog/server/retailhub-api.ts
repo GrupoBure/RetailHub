@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'store-manage-1';
+const API_BUILD = 'store-sections-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -97,6 +97,22 @@ export async function content(path:string,args:any,body:BodyInit|null=null,range
 const uuid=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(v);
 function storeIds(u:any):string[]{return Array.isArray(u?.app_metadata?.store_ids)?[...new Set((u.app_metadata.store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
 function validStoreName(value:unknown){const name=typeof value==='string'?value.trim().normalize('NFC'):'';if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');return name;}
+type Section='Planogramas'|'Listados';
+const fileSection=(name:string):Section|null=>/\.pdf$/i.test(name)?'Planogramas':/\.(xlsx|xls)$/i.test(name)?'Listados':null;
+function sectionName(value:unknown):Section|null{const v=typeof value==='string'?value.toLowerCase():'';return v==='planogramas'?'Planogramas':v==='listados'?'Listados':null;}
+function sectionForPath(path:string,storePath:string,filename:string):Section|null{
+ const prefix=storePath.toLowerCase()+'/';if(!path.toLowerCase().startsWith(prefix))return null;const parts=path.slice(prefix.length).split('/');if(parts.length<2)return null;
+ const section=sectionName(parts[0]);return section&&section===fileSection(filename)?section:null;
+}
+const fileMime=(filename:string)=>/\.pdf$/i.test(filename)?'application/pdf':/\.xlsx$/i.test(filename)?'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'application/vnd.ms-excel';
+async function ensureSectionFolders(folder:any){
+ for(const section of ['planogramas','listados']){
+ const path=folder.path_display+'/'+section;let info;
+ try{info={...(await dbx('files/create_folder_v2',{path,autorename:false})).metadata,'.tag':'folder'};}
+ catch(error){if(!(error instanceof PortalError)||error.status!==409)throw error;info=await dbx('files/get_metadata',{path});}
+ if(info['.tag']!=='folder'||String(info.path_lower).toLowerCase()!==path.toLowerCase())throw new PortalError(400,'No se pudo preparar la carpeta '+section+'. Revisa si existe un archivo con ese nombre en Dropbox.');
+ }
+}
 const safeStore=(s:any)=>({id:s.id,name:s.name,enabled:s.enabled});
 function folderIsStore(e:any){const root=config().root.toLowerCase()+'/';return e?.['.tag']==='folder'&&String(e.path_lower||'').startsWith(root)&&!String(e.path_lower).slice(root.length).includes('/');}
 async function saveStoreFolder(e:any){
@@ -118,20 +134,21 @@ async function validateStoreIds(value:unknown){
 async function liveFolder(store:any){const folder=await dbx('files/get_metadata',{path:store.dropbox_id});if(!folderIsStore(folder))throw new PortalError(404,'La carpeta de esta tienda cambió. Sincroniza Dropbox.');return folder;}
 export async function record(e:any,cache=new Map<string,any>()){
  const root=config().root.toLowerCase()+'/';const path=String(e.path_lower||'');
- if(!path.startsWith(root)||!String(e.name).toLowerCase().endsWith('.pdf'))return null;
+ if(!path.startsWith(root)||!fileSection(String(e.name)))return null;
  const parts=(e.path_display||e.path_lower).slice(config().root.length+1).split('/');
- // Root PDFs have no store and are never published to readers.
- if(parts.length<2)return null;
+ // Files must be in a store and its matching fixed section.
+ if(parts.length<3)return null;
+ const section=sectionName(parts[1]);if(!section||section!==fileSection(e.name))return null;
  const storePath=root+path.slice(root.length).split('/')[0];let store=cache.get(storePath);
- if(!store){store=await saveStoreFolder(await dbx('files/get_metadata',{path:storePath}));cache.set(storePath,store);}
- return {store_id:store.id,dropbox_id:e.id,title:e.name.replace(/\.pdf$/i,'').replace(/_/g,' '),filename:e.name,category:parts.length>2?parts[1]:'General',size:e.size,revision:e.rev,modified_at:e.server_modified,updated_at:new Date().toISOString()};
+ if(!store){const folder=await dbx('files/get_metadata',{path:storePath});store=await saveStoreFolder(folder);if(store.enabled)await ensureSectionFolders(folder);cache.set(storePath,store);}
+ return {store_id:store.id,dropbox_id:e.id,title:e.name.replace(/\.(pdf|xlsx|xls)$/i,'').replace(/_/g,' '),filename:e.name,category:section,size:e.size,revision:e.rev,modified_at:e.server_modified,updated_at:new Date().toISOString()};
 }
 export async function syncBatch(cursor?:string){
  const c=config();if(!c.root.startsWith('/')||c.root==='/')throw new PortalError(503,'Selecciona una carpeta dedicada para el portal.');
  const d=await dbx(cursor?'files/list_folder/continue':'files/list_folder',cursor?{cursor}:{path:c.root,recursive:true,include_deleted:false,limit:50});
  const cache=new Map<string,any>();
- for(const e of d.entries)if(folderIsStore(e))cache.set(e.path_lower,await saveStoreFolder(e));
- const rows=[];let skipped=0;for(const e of d.entries)if(e['.tag']==='file'){const row=await record(e,cache);if(row)rows.push(row);else if(String(e.name).toLowerCase().endsWith('.pdf'))skipped++;}
+ for(const e of d.entries)if(folderIsStore(e)){const store=await saveStoreFolder(e);if(store.enabled)await ensureSectionFolders(e);cache.set(e.path_lower,store);}
+ const rows=[];let skipped=0;for(const e of d.entries)if(e['.tag']==='file'){const row=await record(e,cache);if(row)rows.push(row);else if(fileSection(String(e.name)))skipped++;}
  if(rows.length)await supa('/rest/v1/rh_documents?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rows)});
  return {count:rows.length,skipped,cursor:d.has_more?d.cursor:null};
 }
@@ -142,12 +159,13 @@ async function digest(v:string){return Array.from(new Uint8Array(await crypto.su
 const endpoint=(r:Request)=>config().url+'/functions/v1/retailhub-api';
 async function documentRecord(id:string,user:any){
  if(!/^[a-f0-9-]{36}$/.test(id))throw new PortalError(404,'Documento no encontrado.');
- const rows=await supa('/rest/v1/rh_documents?id=eq.'+id+'&select=dropbox_id,filename,published,store_id');const d=rows[0];
+ const rows=await supa('/rest/v1/rh_documents?id=eq.'+id+'&select=dropbox_id,filename,published,store_id,category');const d=rows[0];
  if(!d||(!d.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Documento no disponible.');
  const store=await requireStore(d.store_id,user);
  // Re-check Dropbox location: a moved file must not inherit its former store's access.
  const [folder,file]=await Promise.all([liveFolder(store),dbx('files/get_metadata',{path:d.dropbox_id})]);
- if(file['.tag']!=='file'||!String(file.name).toLowerCase().endsWith('.pdf')||!String(file.path_lower||'').startsWith(folder.path_lower+'/'))throw new PortalError(404,'El documento cambió de tienda. Sincroniza Dropbox.');return {...d,filename:file.name};
+ const section=sectionForPath(String(file.path_lower||''),folder.path_lower,String(file.name));
+ if(file['.tag']!=='file'||!section||section!==sectionName(d.category))throw new PortalError(404,'Archivo no disponible en esta sección. Sincroniza Dropbox.');return {...d,filename:file.name,category:section};
 }
 // Expiring settings records contain only ticket hashes, never readable file links.
 let cleanedAt=0;
@@ -173,7 +191,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -203,7 +221,7 @@ export async function handle(r:Request){
  const user=await ticketUser(r,p[1]);const d=await documentRecord(p[1],user);
  const range=r.headers.get('range');if(range&&!/^bytes=(?:\d+-\d*|-\d+)$/.test(range))throw new PortalError(416,'Rango no válido.');
  const upstream=await content('files/download',{path:d.dropbox_id},null,range||undefined);
- const headers=new Headers({...cors,'Content-Type':'application/pdf','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Accept-Ranges':'bytes','Content-Disposition':`${new URL(r.url).searchParams.has('download')?'attachment':'inline'}; filename="documento.pdf"; filename*=UTF-8''${encodeURIComponent(d.filename).replace(/'/g,'%27')}`});
+ const headers=new Headers({...cors,'Content-Type':fileMime(d.filename),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Accept-Ranges':'bytes','Content-Disposition':`${d.category==='Listados'||new URL(r.url).searchParams.has('download')?'attachment':'inline'}; filename="documento.${d.filename.split('.').at(-1)}"; filename*=UTF-8''${encodeURIComponent(d.filename).replace(/'/g,'%27')}`});
  for(const k of ['content-length','content-range'])if(upstream.headers.has(k))headers.set(k,upstream.headers.get(k)!);
  return new Response(upstream.body,{status:upstream.status,headers});}
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
@@ -217,7 +235,7 @@ export async function handle(r:Request){
  const path=config().root+'/'+name;let folder;
  // create_folder_v2 returns concrete FolderMetadata, without the union .tag.
  try{folder={...(await dbx('files/create_folder_v2',{path,autorename:false})).metadata,'.tag':'folder'};}catch{folder=await dbx('files/get_metadata',{path});}
- const store=await saveStoreFolder(folder);if(!store.enabled)throw new PortalError(409,'La carpeta pertenece a una tienda retirada del portal. Usa otro nombre.');return json({store:safeStore(store)},201);}
+ const store=await saveStoreFolder(folder);if(!store.enabled)throw new PortalError(409,'La carpeta pertenece a una tienda retirada del portal. Usa otro nombre.');await ensureSectionFolders(folder);return json({store:safeStore(store)},201);}
  if(p[0]==='stores'&&p.length===2&&method==='PATCH'){
  await requireUser(r,true);const store=await requireStore(p[1],user);const b=await bodyJSON(r);const name=validStoreName(b.name);let folder=await liveFolder(store);
  if(folder.name!==name){
@@ -241,7 +259,8 @@ export async function handle(r:Request){
  if(route==='documents'&&method==='GET'){
  const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});await requireStore(id,user);
  const fields='id,title,filename,category,size,modified_at,published,store_id';
- return json({documents:await supa('/rest/v1/rh_documents?select='+fields+'&store_id=eq.'+id+(user.app_metadata.role==='admin'?'':'&published=eq.true')+'&order=modified_at.desc&limit=5000')});}
+ const rows=await supa('/rest/v1/rh_documents?select='+fields+'&store_id=eq.'+id+'&category=in.(Planogramas,Listados)'+(user.app_metadata.role==='admin'?'':'&published=eq.true')+'&order=modified_at.desc&limit=5000');
+ return json({documents:rows.filter((d:any)=>sectionName(d.category)===fileSection(String(d.filename))&&fileSection(String(d.filename))!==null)});}
  if(p[0]==='documents'&&p[1]&&p[2]==='link'&&method==='POST'){
  await documentRecord(p[1],user);const token=crypto.randomUUID()+crypto.randomUUID();
  const expires=Date.now()+15*60*1000;await transient('file:'+await digest(token),{uid:user.id,doc:p[1],expires});
@@ -287,22 +306,27 @@ export async function handle(r:Request){
  const u=await supa('/auth/v1/admin/users/'+p[1],{method:'PUT',body:JSON.stringify(changes)});return json({user:safeUser(u)});}
  if(p[0]==='upload'&&method==='POST'){
  if(route==='upload/start'){
- const b:any=await bodyJSON(r);const name=String(b.filename||'').normalize('NFC');const category=String(b.category||'General').normalize('NFC');
- if(!name.toLowerCase().endsWith('.pdf')||/[\/\\\u0000-\u001f]/.test(name)||name.length>180||name==='..'||!name)throw new PortalError(400,'Selecciona un archivo PDF con un nombre válido.');
- if(!/^[\p{L}\p{N} _-]{1,60}$/u.test(category))throw new PortalError(400,'Revisa el nombre de la categoría.');
+ const b:any=await bodyJSON(r);const name=String(b.filename||'').normalize('NFC');const category=sectionName(b.category);const type=fileSection(name);
+ if(!type||/[\/\\\u0000-\u001f]/.test(name)||name.length>180||name==='..'||!name)throw new PortalError(400,'Selecciona un PDF, XLSX o XLS con un nombre válido.');
+ if(!category||category!==type)throw new PortalError(400,'Planogramas admite solo PDF; Listados admite solo Excel (XLSX o XLS).');
  const root=config().root;if(!root.startsWith('/')||root==='/')throw new PortalError(503,'Selecciona una carpeta dedicada para el portal.');
- const store=await requireStore(b.store_id,user);const storeFolder=await liveFolder(store);const folder=storeFolder.path_display+'/'+category;
+ const store=await requireStore(b.store_id,user);const storeFolder=await liveFolder(store);const folder=storeFolder.path_display+'/'+category.toLowerCase();
  try{await dbx('files/create_folder_v2',{path:folder,autorename:false});}catch(e){if(e instanceof PortalError&&e.message.includes('ocupado'))throw e;await dbx('files/get_metadata',{path:folder});}
  const response=await content('files/upload_session/start',{close:false},new Uint8Array());const d=await response.json() as any;
- const ticket=await seal('upload',{sid:d.session_id,path:folder+'/'+name,uid:user.id,store_id:store.id,expires:Date.now()+3600000});return json({ticket});}
+ const ticket=await seal('upload',{sid:d.session_id,path:folder+'/'+name,section:category,uid:user.id,store_id:store.id,expires:Date.now()+3600000});return json({ticket});}
  if(route==='upload/chunk'||route==='upload/finish'){
  const ticket=r.headers.get('X-Upload-Ticket');if(!ticket)throw new PortalError(400,'Falta la sesión de subida.');
- const t=await unseal('upload',ticket);const uploadStore=await requireStore(t.store_id,user);const uploadFolder=await liveFolder(uploadStore);if(!String(t.path).toLowerCase().startsWith(uploadFolder.path_lower+'/'))throw new PortalError(403,'La tienda cambió. Inicia otra vez la subida.');if(t.uid!==user.id||t.expires<Date.now())throw new PortalError(403,'La sesión de subida venció.');
+ const t=await unseal('upload',ticket);const uploadStore=await requireStore(t.store_id,user);const uploadFolder=await liveFolder(uploadStore);if(!sectionForPath(String(t.path),uploadFolder.path_lower,String(t.path).split('/').at(-1)||''))throw new PortalError(403,'La tienda cambió. Inicia otra vez la subida.');if(t.uid!==user.id||t.expires<Date.now())throw new PortalError(403,'La sesión de subida venció.');
  const offset=Number(r.headers.get('X-Upload-Offset'));if(!Number.isSafeInteger(offset)||offset<0)throw new PortalError(400,'Posición de subida no válida.');
  const length=Number(r.headers.get('content-length'));if(length>8*1024*1024)throw new PortalError(413,'El bloque es demasiado grande.');
  const bytes=await bounded(r,8*1024*1024);const data=bytes.buffer;if(data.byteLength>8*1024*1024)throw new PortalError(413,'El bloque es demasiado grande.');
- if(offset===0&&data.byteLength&&new TextDecoder().decode(data.slice(0,5))!=='%PDF-')throw new PortalError(400,'El archivo no tiene un encabezado PDF válido.');
- if(route==='upload/finish'&&offset===0&&data.byteLength===0)throw new PortalError(400,'El PDF está vacío.');
+ if(offset===0&&data.byteLength){
+ const name=String(t.path).split('/').at(-1)||'';const head=new Uint8Array(data);const pdf=/\.pdf$/i.test(name)&&new TextDecoder().decode(data.slice(0,5))==='%PDF-';
+ const xlsx=/\.xlsx$/i.test(name)&&[0x50,0x4b,0x03,0x04].every((v,i)=>head[i]===v);
+ const xls=/\.xls$/i.test(name)&&[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1].every((v,i)=>head[i]===v);
+ if(!pdf&&!xlsx&&!xls)throw new PortalError(400,'El contenido del archivo no corresponde al formato PDF o Excel seleccionado.');}
+
+ if(route==='upload/finish'&&offset===0&&data.byteLength===0)throw new PortalError(400,'El archivo está vacío.');
  if(route==='upload/chunk'){await content('files/upload_session/append_v2',{cursor:{session_id:t.sid,offset},close:false},data);return json({ok:true});}
  const upstream=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:true,mute:false,strict_conflict:false}},data);
  const rec=await record(await upstream.json());if(rec)await supa('/rest/v1/rh_documents?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rec)});
