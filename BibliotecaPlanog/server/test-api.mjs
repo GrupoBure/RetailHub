@@ -17,6 +17,7 @@ const uid='22222222-2222-4222-8222-222222222222';
 const storeA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',storeB='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 let userStoreIds=[storeA],fileStore='a',folderMoved=false,currentFilename='Prueba á.pdf',currentSection='Planogramas',catalogOverride=null;
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
+let documentDeleted=false,dropboxFileDeleted=false,deleteDropboxFailure=false,deleteDatabaseFailure=false,metadataFolder=false,liveFilename='',fileRevision='a1c10ce0dd78';
 let role='reader',disabled=false,published=true,oauthExchanges=0;
 let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
 const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,store_ids:userStoreIds}});
@@ -46,6 +47,8 @@ globalThis.fetch=async(url,init={})=>{
  let rows=[...storeRows];const ids=u.searchParams.get('id');if(ids?.startsWith('eq.'))rows=rows.filter(v=>v.id===ids.slice(3));if(ids?.startsWith('in.'))rows=rows.filter(v=>ids.slice(4,-1).split(',').includes(v.id));if(u.searchParams.get('enabled')==='eq.true')rows=rows.filter(v=>v.enabled);return reply(rows);
  }
  if(u.pathname==='/rest/v1/rh_documents'){
+ if(init.method==='DELETE'){if(deleteDatabaseFailure){deleteDatabaseFailure=false;return reply({},503);}documentDeleted=true;return reply(null,204);}
+ if(documentDeleted&&init.method!=='POST')return reply([]);
  if(init.method==='POST')return reply(null,201);
  const selected=u.searchParams.get('store_id');if(selected&&selected!=='eq.'+storeA)return reply([]);
  return reply(catalogOverride||[{id,store_id:storeA,dropbox_id:'id:pdf',filename:currentFilename,category:currentSection,published}]);}
@@ -61,10 +64,16 @@ globalThis.fetch=async(url,init={})=>{
  }
  if(u.pathname==='/2/files/get_metadata'){
  const path=JSON.parse(init.body).path;
- if(path==='id:pdf')return reply({'.tag':'file',id:'id:pdf',name:currentFilename,path_lower:(folderOverrides.get('id:store-'+fileStore)?.path_lower||'/retail hub/portal/tienda '+fileStore)+'/'+currentSection.toLowerCase()+'/'+currentFilename.toLowerCase()});
+ if(path==='id:pdf'&&dropboxFileDeleted)return reply({error_summary:'path/not_found/'},409);
+ if(path==='id:pdf')return reply({'.tag':metadataFolder?'folder':'file',id:'id:pdf',rev:fileRevision,name:liveFilename||currentFilename,path_lower:(folderOverrides.get('id:store-'+fileStore)?.path_lower||'/retail hub/portal/tienda '+fileStore)+'/'+currentSection.toLowerCase()+'/'+currentFilename.toLowerCase()});
  const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path.toLowerCase());if(store&&folderOverrides.has(store.dropbox_id))return reply(folderOverrides.get(store.dropbox_id));if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
  if(createdFolders.has(path.toLowerCase()))return reply({...createdFolders.get(path.toLowerCase()),'.tag':'folder'});
  throw Error('Unexpected metadata path: '+path);
+ }
+ if(u.pathname==='/2/files/delete_v2'){
+ const b=JSON.parse(init.body);assert.equal(b.path,'id:pdf');assert.equal(b.parent_rev,fileRevision);assert.equal(metadataFolder,false);
+ if(deleteDropboxFailure)return reply({error_summary:'no_write_permission/'},403);
+ if(dropboxFileDeleted)return reply({error_summary:'path_lookup/not_found/'},409);dropboxFileDeleted=true;return reply({metadata:{'.tag':'file',id:'id:pdf',name:currentFilename,rev:fileRevision}});
  }
  if(u.pathname==='/2/files/move_v2'){
  const b=JSON.parse(init.body);assert.equal(b.autorename,false);assert.ok(b.from_path.startsWith('id:'));
@@ -73,7 +82,7 @@ globalThis.fetch=async(url,init={})=>{
  if(current.path_lower===b.to_path.toLowerCase()||storeRows.some(v=>v.dropbox_id!==store.dropbox_id&&v.path_lower===b.to_path.toLowerCase()))return reply({error_summary:'to/conflict/folder/'},409);
  const metadata={...current,name:b.to_path.split('/').at(-1),path_lower:b.to_path.toLowerCase(),path_display:b.to_path};folderOverrides.set(store.dropbox_id,metadata);return reply({metadata});
  }
- if(u.pathname==='/2/files/list_folder')return reply({entries:[{'.tag':'folder',id:'id:store-a',name:'Tienda A',path_lower:'/retail hub/portal/tienda a',path_display:'/Retail Hub/Portal/Tienda A'},{'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'}],has_more:false});
+ if(u.pathname==='/2/files/list_folder')return reply({entries:[{'.tag':'folder',id:'id:store-a',name:'Tienda A',path_lower:'/retail hub/portal/tienda a',path_display:'/Retail Hub/Portal/Tienda A'},{'.tag':'file',id:'id:pdf',name:'Prueba á.pdf',path_lower:'/retail hub/portal/tienda a/planogramas/prueba á.pdf',path_display:'/Retail Hub/Portal/Tienda A/Planogramas/Prueba á.pdf',size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'}].filter(v=>!dropboxFileDeleted||v['.tag']!=='file'),has_more:false});
  if(u.pathname==='/2/files/upload_session/start')return reply({session_id:'upload-id'});
  if(u.pathname==='/2/files/upload_session/append_v2')return reply(null,200);
  if(u.pathname==='/2/files/upload_session/finish'){
@@ -267,5 +276,37 @@ await check('wrong-folder files cannot be accessed through old links',async()=>{
 await check('Excel tickets obey store permission revocation',async()=>{
  role='reader';currentFilename='Productos.xlsx';currentSection='Listados';const link=await (await request('documents/'+id+'/link',{method:'POST'})).json();assert.ok(link.url);userStoreIds=[storeB];assert.equal((await request(link.url.split('retailhub-api/')[1],{token:null})).status,404);userStoreIds=[storeA];currentFilename='Prueba á.pdf';currentSection='Planogramas';role='admin';
 });
+const deleteBody=()=>({confirm_filename:currentFilename});
+const resetFileDeletion=()=>{documentDeleted=false;dropboxFileDeleted=false;deleteDropboxFailure=false;deleteDatabaseFailure=false;metadataFolder=false;liveFilename='';fileRevision='a1c10ce0dd78';fileStore='a';currentFilename='Prueba á.pdf';currentSection='Planogramas';role='admin';};
+await check('only enabled administrators can delete documents',async()=>{
+ role='reader';assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,403);assert.equal((await request('documents/'+id,{method:'DELETE',token:null,body:deleteBody()})).status,401);role='admin';disabled=true;assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,403);disabled=false;assert.equal(dropboxFileDeleted,false);
+});
+await check('document deletion requires confirmation of the current filename',async()=>{
+ const at=calls.length;assert.equal((await request('documents/'+id,{method:'DELETE',body:{confirm_filename:'wrong.pdf'}})).status,409);liveFilename='Renamed.pdf';assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,409);liveFilename='';assert.ok(!calls.slice(at).some(v=>v.url.includes('files/delete_v2')||v.init.method==='DELETE'));
+});
+await check('folders, moved files, mismatched sections and unknown file revisions cannot be deleted',async()=>{
+ const at=calls.length;metadataFolder=true;assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,404);metadataFolder=false;
+ fileStore='b';assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,404);fileStore='a';
+ currentFilename='wrong.xlsx';currentSection='Planogramas';assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,400);currentFilename='Prueba á.pdf';
+ fileRevision='';assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,502);fileRevision='a1c10ce0dd78';assert.ok(!calls.slice(at).some(v=>v.url.includes('files/delete_v2')||v.init.method==='DELETE'));
+});
+await check('PDF deletion pins file ID and revision, removes catalog entry and invalidates previous tickets',async()=>{
+ const link=await (await request('documents/'+id+'/link',{method:'POST'})).json();const folders=createdFolders.size;assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,200);assert.equal(documentDeleted,true);assert.equal(dropboxFileDeleted,true);assert.equal(createdFolders.size,folders);assert.deepEqual((await (await request('documents?store='+storeA)).json()).documents,[]);assert.equal((await request(link.url.split('retailhub-api/')[1],{token:null})).status,404);
+ assert.equal((await request('sync',{method:'POST',body:{}})).status,200);assert.equal(documentDeleted,true);assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,200);resetFileDeletion();
+});
+await check('both XLSX and XLS can be deleted without removing their store or section folders',async()=>{
+ for(const name of ['Listado.xlsx','Listado.xls']){currentFilename=name;currentSection='Listados';const folders=createdFolders.size,stores=storeRows.length;assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,200);assert.equal(documentDeleted,true);assert.equal(dropboxFileDeleted,true);assert.equal(createdFolders.size,folders);assert.equal(storeRows.length,stores);resetFileDeletion();}
+});
+await check('failed Dropbox deletion preserves the catalog entry',async()=>{
+ deleteDropboxFailure=true;const r=await request('documents/'+id,{method:'DELETE',body:deleteBody()});assert.ok(r.status>=400);assert.equal(documentDeleted,false);assert.equal(dropboxFileDeleted,false);resetFileDeletion();
+});
+await check('retry after database cleanup failure does not delete Dropbox twice',async()=>{
+ deleteDatabaseFailure=true;assert.ok((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status>=400);assert.equal(dropboxFileDeleted,true);assert.equal(documentDeleted,false);const deletes=calls.filter(v=>v.url.includes('files/delete_v2')).length;
+ assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,200);assert.equal(documentDeleted,true);assert.equal(calls.filter(v=>v.url.includes('files/delete_v2')).length,deletes);resetFileDeletion();
+});
+await check('already missing Dropbox files can be removed from the catalog without touching other files',async()=>{
+ dropboxFileDeleted=true;const at=calls.length;assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,200);assert.equal(documentDeleted,true);assert.ok(!calls.slice(at).some(v=>v.url.includes('files/delete_v2')));resetFileDeletion();
+});
+await check('delete capability is advertised for the admin interface',async()=>assert.equal((await (await request('status',{token:null})).json()).features.deleteDocuments,true));
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

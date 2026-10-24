@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'store-sections-1';
+const API_BUILD = 'document-delete-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -16,6 +16,7 @@ const cors={'Access-Control-Allow-Origin':ORIGIN,'Access-Control-Allow-Methods':
 
 
 export class PortalError extends Error { constructor(public status:number, message:string){super(message);} }
+class DropboxNotFound extends PortalError {constructor(){super(404,'El archivo o la carpeta ya no existe en Dropbox.');}}
 export const config = () => {
  const e=env as unknown as Record<string,string|undefined>;
  return {url:e.SUPABASE_URL?.replace(/\/$/,''),anon:injected('SUPABASE_PUBLISHABLE_KEYS','SUPABASE_ANON_KEY'),service:injected('SUPABASE_SECRET_KEYS','SUPABASE_SERVICE_ROLE_KEY'),
@@ -86,7 +87,7 @@ export const headerJSON=(x:unknown)=>JSON.stringify(x).replace(/[\u007f-\uffff]/
 export async function dbx(path:string,args:any){
  const r=await fetch('https://api.dropboxapi.com/2/'+path,{method:'POST',headers:{Authorization:'Bearer '+await dbxToken(),'Content-Type':'application/json'},body:JSON.stringify(args)});
  const d=await r.json().catch(()=>({})) as any;
- if(!r.ok){if(r.status===429)throw new PortalError(429,'Dropbox está ocupado. Intenta de nuevo en unos minutos.');if(d.error_summary?.includes('conflict'))throw new PortalError(409,'Ya existe una carpeta o archivo con ese nombre en Dropbox.');throw new PortalError(400,d.error_summary?.includes('not_found')?'No se encontró la carpeta o el documento en Dropbox.':'Dropbox no pudo completar la operación.');}return d;
+ if(!r.ok){if(r.status===429)throw new PortalError(429,'Dropbox está ocupado. Intenta de nuevo en unos minutos.');if(d.error_summary?.includes('not_found'))throw new DropboxNotFound();if(d.error_summary?.includes('conflict'))throw new PortalError(409,'Ya existe una carpeta o archivo con ese nombre en Dropbox.');throw new PortalError(400,d.error_summary?.includes('not_found')?'No se encontró la carpeta o el documento en Dropbox.':'Dropbox no pudo completar la operación.');}return d;
 }
 export async function content(path:string,args:any,body:BodyInit|null=null,range?:string){
  const h:Record<string,string>={Authorization:'Bearer '+await dbxToken(),'Dropbox-API-Arg':headerJSON(args),'Content-Type':'application/octet-stream'};
@@ -191,7 +192,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -265,6 +266,23 @@ export async function handle(r:Request){
  await documentRecord(p[1],user);const token=crypto.randomUUID()+crypto.randomUUID();
  const expires=Date.now()+15*60*1000;await transient('file:'+await digest(token),{uid:user.id,doc:p[1],expires});
  const url=endpoint(r)+'/documents/'+p[1]+'/file?ticket='+encodeURIComponent(token);return json({url,download:url+'&download=1',expires});}
+ if(p[0]==='documents'&&p.length===2&&method==='DELETE'){
+ await requireUser(r,true);if(!uuid(p[1]))throw new PortalError(404,'Documento no encontrado.');const b=await bodyJSON(r);
+ const rows=await supa('/rest/v1/rh_documents?id=eq.'+p[1]+'&select=id,dropbox_id,filename,store_id,category');const d=rows[0];if(!d)return json({ok:true});
+ const store=await requireStore(d.store_id,user);
+ if(b.confirm_filename!==d.filename)throw new PortalError(409,'El archivo cambió. Actualiza la biblioteca y confirma de nuevo.');
+ if(!sectionName(d.category)||fileSection(d.filename)!==sectionName(d.category))throw new PortalError(400,'Solo se pueden eliminar PDF de planogramas y Excel de listados.');
+ let file:any;try{file=await dbx('files/get_metadata',{path:d.dropbox_id});}catch(error){if(!(error instanceof DropboxNotFound))throw error;}
+ if(file){
+ const folder=await liveFolder(store);const section=sectionForPath(String(file.path_lower||''),folder.path_lower,String(file.name));
+ if(file['.tag']!=='file'||section!==sectionName(d.category))throw new PortalError(404,'El archivo cambió de ubicación. Sincroniza Dropbox antes de eliminarlo.');
+ if(file.name!==b.confirm_filename)throw new PortalError(409,'El nombre del archivo cambió. Sincroniza y confirma de nuevo.');
+ if(typeof file.rev!=='string'||!/^[a-f0-9]{9,}$/i.test(file.rev))throw new PortalError(502,'No se pudo verificar la versión del archivo. Intenta nuevamente.');
+ // Pin the file ID and revision. Dropbox parent_rev does not permit folder deletion.
+ try{await dbx('files/delete_v2',{path:d.dropbox_id,parent_rev:file.rev});}catch(error){if(!(error instanceof DropboxNotFound))throw error;}
+ }
+ // Retry-safe cleanup if Dropbox deletion succeeded but the prior database call failed.
+ await supa('/rest/v1/rh_documents?id=eq.'+p[1],{method:'DELETE'});return json({ok:true});}
  if(p[0]==='documents'&&p[1]&&method==='PATCH'){
  await requireUser(r,true);if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Documento no encontrado.');const b:any=await bodyJSON(r);
  if(typeof b.published!=='boolean')throw new PortalError(400,'Estado no válido.');
