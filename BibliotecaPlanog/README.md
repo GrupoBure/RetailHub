@@ -121,3 +121,15 @@ El avance cuenta **solo actividades finales** (elementos sin hijos), con el mism
 El guardado usa una revisión entera y actualización condicional. Dos administradores no pueden sobrescribirse silenciosamente: el segundo recibe 409 y debe Actualizar y reaplicar su cambio. La inicialización concurrente ignora conflictos sin reemplazar un dashboard existente. El lector actualiza con el botón Actualizar; no hay sincronización en tiempo real.
 
 Validación local: TypeScript, build de Vite, `server/test-api.mjs` (servicios simulados) y `server/test-dashboard.mjs` (cálculos, jerarquía y orden). La activación y persistencia reales requieren aplicar SQL y función en Supabase.
+
+## Machotes guardados · dashboard-templates-1
+
+Activación: ejecutar `database/004-dashboard-machotes.sql` después de `003-dashboard.sql`, reemplazar la Edge Function con `server/retailhub-api.ts` y recargar el portal. El estado público anuncia `dashboardTemplates: true`.
+
+Desde un dashboard ya personalizado, el administrador pulsa **Guardar como machote**, asigna un nombre y guarda. Se toma la versión guardada del servidor; si cambió mientras tanto, se pide actualizar. Se conserva una copia independiente con todos los nombres, etapas, actividades, subtareas y su orden; todas las actividades pasan a Pendiente, incluyendo las que estaban en No aplica. Responsables, fechas y notas quedan vacíos. El dashboard de origen no se modifica. Los filtros de pantalla no afectan al contenido guardado.
+
+En la tienda de destino, **Usar machote guardado** permite elegir uno de los machotes. Se puede inicializar un dashboard nuevo o reemplazar uno existente; en este último caso se exige marcar una confirmación explícita. La revisión del destino impide sobrescribir cambios concurrentes. Cada aplicación genera IDs nuevos y vuelve a limpiar estados, responsables, fechas y notas en el servidor. Después se edita de forma independiente: cambiar la tienda de origen, el destino o guardar otro machote no modifica las copias anteriores.
+
+Los machotes se guardan en `rh_dashboard_templates`, protegida con RLS, sin permisos directos de anon/authenticated. Solo administradores activos pueden listar, guardar y aplicar; la tienda origen/destino debe estar activa. Son machotes compartidos entre los administradores del portal, no entre los lectores. La lista se pagina por UUID y solo devuelve nombre, fecha y cantidad de elementos; las estructuras permanecen en el servidor hasta su aplicación. Guardar repetidamente crea copias separadas, nunca sobrescribe un machote por coincidencia del nombre. El selector distingue copias por fecha y hora.
+
+No se copian documentos, usuarios ni permisos de tienda. No se crean enlaces públicos ni archivos en Dropbox. Validación adicional: pruebas de snapshots inmutables, limpieza de campos, independencia de IDs/jerarquía, lectura protegida, confirmación de reemplazo y revisión del destino. Las pruebas usan servicios simulados; la persistencia real requiere activar tabla y función.

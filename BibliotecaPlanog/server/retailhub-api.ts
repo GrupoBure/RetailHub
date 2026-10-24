@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'store-dashboard-1';
+const API_BUILD = 'dashboard-templates-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -149,6 +149,25 @@ export function validateDashboard(value:unknown){
  return items.map(v=>items.some(c=>c.parent_id===v.id)?{...v,status:'Pendiente'}:v);
 }
 
+export function cleanDashboardTemplate(value:unknown){
+ const items=validateDashboard(value);const ids=new Map(items.map(v=>[v.id,crypto.randomUUID()]));
+ return items.map(v=>({id:ids.get(v.id)!,parent_id:v.parent_id===null?null:ids.get(v.parent_id)!,title:v.title,status:'Pendiente',owner:'',due:'',notes:''}));
+}
+async function writeDashboard(storeId:string,uid:string,revision:any,items:any[]){
+ const path='/rest/v1/rh_dashboards',fields='store_id,revision,items,updated_at';let rows;
+ const now=new Date().toISOString();
+ if(revision===null){
+ // Ignore conflicts, never overwrite another administrator's initialized store.
+ rows=await supa(path+'?on_conflict=store_id&select='+fields,{method:'POST',headers:{Prefer:'resolution=ignore-duplicates,return=representation'},body:JSON.stringify({store_id:storeId,revision:1,items,updated_at:now,updated_by:uid})});
+ }else{
+ if(!Number.isSafeInteger(revision)||revision<1||revision>=2147483647)throw new PortalError(400,'Versión del dashboard no válida.');
+ // Compare-and-swap prevents silent lost updates across tabs/administrators.
+ rows=await supa(path+'?store_id=eq.'+storeId+'&revision=eq.'+revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({revision:revision+1,items,updated_at:now,updated_by:uid})});
+ }
+ if(!rows?.length)throw new PortalError(409,'Otro administrador modificó este dashboard. Pulsa Actualizar y vuelve a aplicar tu cambio.');
+ return rows[0];
+}
+
 async function liveFolder(store:any){const folder=await dbx('files/get_metadata',{path:store.dropbox_id});if(!folderIsStore(folder))throw new PortalError(404,'La carpeta de esta tienda cambió. Sincroniza Dropbox.');return folder;}
 export async function record(e:any,cache=new Map<string,any>()){
  const root=config().root.toLowerCase()+'/';const path=String(e.path_lower||'');
@@ -209,7 +228,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -274,25 +293,45 @@ export async function handle(r:Request){
  // therefore cannot republish this store or reactivate its former assignments.
  await supa('/rest/v1/rh_stores?id=eq.'+store.id,{method:'PATCH',body:JSON.stringify({enabled:false,updated_at:new Date().toISOString()})});
  return json({ok:true});}
+ if(p[0]==='dashboard-templates'){
+ membership(user,true);
+ if(route==='dashboard-templates'&&method==='GET'){
+ const cursor=new URL(r.url).searchParams.get('before');
+ if(cursor&&!uuid(cursor))throw new PortalError(400,'Página de machotes no válida.');
+ const rows=await supa('/rest/v1/rh_dashboard_templates?select=id,name,item_count,created_at&order=id.desc&limit=100'+(cursor?'&id=lt.'+cursor:''));
+ return json({templates:rows,next:rows.length===100?rows.at(-1).id:null});
+ }
+ if(route==='dashboard-templates'&&method==='POST'){
+ const b=await bodyJSON(r);const store=await requireStore(b.store_id,user);
+ const name=typeof b.name==='string'?b.name.trim():'';if(!name||name.length>100)throw new PortalError(400,'Escribe un nombre de hasta 100 caracteres para el machote.');
+ const rows=await supa('/rest/v1/rh_dashboards?store_id=eq.'+store.id+'&select=items,revision');const source=rows[0];
+ if(!source)throw new PortalError(404,'Primero inicia el dashboard de esta tienda.');
+ if(source.revision!==b.revision)throw new PortalError(409,'El dashboard cambió. Actualiza antes de guardar el machote.');
+ const items=cleanDashboardTemplate(source.items);
+ const saved=await supa('/rest/v1/rh_dashboard_templates?select=id,name,item_count,created_at',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({name,items,item_count:items.length,created_by:user.id})});
+ return json({template:saved[0]},201);
+ }
+ if(p.length===3&&p[2]==='apply'&&method==='POST'){
+ if(!uuid(p[1]))throw new PortalError(404,'Machote no disponible.');
+ const b=await bodyJSON(r);const store=await requireStore(b.store_id,user);
+ if(b.revision!==null&&b.confirm_replace!==true)throw new PortalError(400,'Confirma que deseas reemplazar el dashboard de destino.');
+ const rows=await supa('/rest/v1/rh_dashboard_templates?id=eq.'+p[1]+'&select=items');if(!rows[0])throw new PortalError(404,'Machote no disponible.');
+ const items=cleanDashboardTemplate(rows[0].items);
+ const dashboard=await writeDashboard(store.id,user.id,b.revision,items);
+ return json({dashboard});
+ }
+ throw new PortalError(404,'Ruta no encontrada.');
+ }
  if(p[0]==='stores'&&p.length===3&&p[2]==='dashboard'&&['GET','POST','PATCH'].includes(method)){
  // Validate role before processing mutations and always re-check the store grant.
  if(method!=='GET')membership(user,true);
  const store=await requireStore(p[1],user);
  const path='/rest/v1/rh_dashboards';const fields='store_id,revision,items,updated_at';
  if(method==='GET'){const rows=await supa(path+'?store_id=eq.'+store.id+'&select='+fields);return json({dashboard:rows[0]||null});}
- const b=await bodyJSON(r,262144);const items=validateDashboard(b.items);let rows;
- const now=new Date().toISOString();
- if(method==='POST'){
- // Ignore conflicts, never overwrite another administrator's initialized store.
- if(b.revision!==null)throw new PortalError(400,'Actualiza el dashboard antes de iniciar.');
- rows=await supa(path+'?on_conflict=store_id&select='+fields,{method:'POST',headers:{Prefer:'resolution=ignore-duplicates,return=representation'},body:JSON.stringify({store_id:store.id,revision:1,items,updated_at:now,updated_by:user.id})});
- }else{
- if(!Number.isSafeInteger(b.revision)||b.revision<1||b.revision>=2147483647)throw new PortalError(400,'Versión del dashboard no válida.');
- // Compare-and-swap prevents silent lost updates across tabs/administrators.
- rows=await supa(path+'?store_id=eq.'+store.id+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({revision:b.revision+1,items,updated_at:now,updated_by:user.id})});
- }
- if(!rows?.length)throw new PortalError(409,'Otro administrador modificó este dashboard. Pulsa Actualizar y vuelve a aplicar tu cambio.');
- return json({dashboard:rows[0]},method==='POST'?201:200);
+ const b=await bodyJSON(r,262144);const items=validateDashboard(b.items);
+ if(method==='POST'&&b.revision!==null||method==='PATCH'&&b.revision===null)throw new PortalError(400,'Versión del dashboard no válida.');
+ const dashboard=await writeDashboard(store.id,user.id,b.revision,items);
+ return json({dashboard},method==='POST'?201:200);
  }
  if(route==='documents'&&method==='GET'){
  const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});await requireStore(id,user);

@@ -19,7 +19,7 @@ let userStoreIds=[storeA],fileStore='a',folderMoved=false,currentFilename='Prueb
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let documentDeleted=false,dropboxFileDeleted=false,deleteDropboxFailure=false,deleteDatabaseFailure=false,metadataFolder=false,liveFilename='',fileRevision='a1c10ce0dd78';
 let role='reader',disabled=false,published=true,oauthExchanges=0;
-let dashboards=new Map();
+let dashboards=new Map(),dashboardTemplates=new Map();
 let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
 const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,store_ids:userStoreIds}});
 const reply=(data,status=200)=>new Response(data===null?null:JSON.stringify(data),{status});
@@ -41,6 +41,12 @@ globalThis.fetch=async(url,init={})=>{
  if(init.method==='DELETE'){const old=settings.get(key);settings.delete(key);return reply(old?[{key,value:old}]:[]);}
  if(key)return reply(settings.has(key)?[{value:settings.get(key)}]:[]);
  return reply([...settings].map(([key,value])=>({key,value})));
+ }
+ if(u.pathname==='/rest/v1/rh_dashboard_templates'){
+ const fields=u.searchParams.get('select')?.split(',');
+ const project=d=>Object.fromEntries((fields||Object.keys(d)).map(k=>[k,d[k]]));
+ if(init.method==='POST'){const data={...JSON.parse(init.body),id:crypto.randomUUID(),created_at:new Date().toISOString()};dashboardTemplates.set(data.id,data);return reply([project(data)],201);}
+ let rows=[...dashboardTemplates.values()].sort((a,b)=>b.id.localeCompare(a.id));const idFilter=u.searchParams.get('id');if(idFilter?.startsWith('eq.'))rows=rows.filter(v=>v.id===idFilter.slice(3));if(idFilter?.startsWith('lt.'))rows=rows.filter(v=>v.id<idFilter.slice(3));return reply(rows.slice(0,100).map(project));
  }
  if(u.pathname==='/rest/v1/rh_dashboards'){
  const store=u.searchParams.get('store_id')?.slice(3);
@@ -358,5 +364,49 @@ await check('permission revocation and retired stores block dashboard reads and 
  role='admin';assert.equal((await request(dashPath,{method:'PATCH',body:{revision:3,items:[]}})).status,404);storeRows.find(v=>v.id===storeA).enabled=true;
 });
 await check('dashboard capability is advertised',async()=>assert.equal((await (await request('status',{token:null})).json()).features.storeDashboard,true));
+// Reusable snapshots: save a sanitized server-side copy and apply independently.
+let savedTemplateId;
+const sourceTasks=[item({status:'Terminado',owner:'Original',notes:'Privado',due:'2026-12-02'}),item({id:childId,parent_id:taskId,title:'Validar PDF',status:'No aplica',owner:'Responsable',notes:'Nota',due:'2026-11-02'})];
+dashboards.set(storeA,{store_id:storeA,revision:10,items:structuredClone(sourceTasks),updated_at:'2026-10-24T00:00:00Z'});
+role='reader';
+await check('readers and disabled admins cannot list, save or apply templates',async()=>{
+ for(const [path,method,body] of [['dashboard-templates','GET',undefined],['dashboard-templates','POST',{store_id:storeA,name:'Base',revision:10}],['dashboard-templates/'+taskId+'/apply','POST',{store_id:storeA,revision:null}]])assert.equal((await request(path,{method,body})).status,403);
+ role='admin';disabled=true;assert.equal((await request('dashboard-templates')).status,403);disabled=false;
+ assert.equal((await request('dashboard-templates',{token:null})).status,401);
+});
+await check('save reads the exact source revision and does not change the original board',async()=>{
+ const original=structuredClone(dashboards.get(storeA));
+ const response=await request('dashboard-templates',{method:'POST',body:{name:'Machote personalizado',store_id:storeA,revision:10,items:[]}});assert.equal(response.status,201);
+ const result=(await response.json()).template;savedTemplateId=result.id;assert.equal(result.name,'Machote personalizado');assert.equal(result.item_count,2);assert.equal(result.items,undefined);assert.deepEqual(dashboards.get(storeA),original);
+ const saved=dashboardTemplates.get(savedTemplateId);assert.deepEqual(saved.items.map(v=>v.title),sourceTasks.map(v=>v.title));assert.ok(saved.items.every(v=>v.status==='Pendiente'&&v.owner===''&&v.due===''&&v.notes===''));assert.notEqual(saved.items[0].id,taskId);assert.equal(saved.items[1].parent_id,saved.items[0].id);
+});
+await check('template names, missing boards, stale source revisions and retired source stores are rejected',async()=>{
+ for(const name of ['', 'a'.repeat(101)])assert.equal((await request('dashboard-templates',{method:'POST',body:{store_id:storeA,name,revision:10}})).status,400);
+ assert.equal((await request('dashboard-templates',{method:'POST',body:{store_id:storeA,name:'Old',revision:9}})).status,409);
+ dashboards.delete(storeB);assert.equal((await request('dashboard-templates',{method:'POST',body:{store_id:storeB,name:'Missing',revision:1}})).status,404);
+ storeRows.find(v=>v.id===storeA).enabled=false;assert.equal((await request('dashboard-templates',{method:'POST',body:{store_id:storeA,name:'Retired',revision:10}})).status,404);storeRows.find(v=>v.id===storeA).enabled=true;
+ assert.equal(dashboardTemplates.size,1);
+});
+await check('template listing contains metadata only and validates pagination',async()=>{
+ const d=await (await request('dashboard-templates')).json();assert.equal(d.templates[0].id,savedTemplateId);assert.equal(d.templates[0].items,undefined);assert.equal(d.next,null);assert.equal((await request('dashboard-templates?before=invalid')).status,400);
+});
+await check('applying initializes a new store from the saved snapshot with fresh IDs and pending tasks',async()=>{
+ dashboards.get(storeA).items[0].title='Later source edit';
+ const r=await request('dashboard-templates/'+savedTemplateId+'/apply',{method:'POST',body:{store_id:storeB,revision:null}});assert.equal(r.status,200);
+ const board=(await r.json()).dashboard;assert.equal(board.revision,1);assert.equal(board.items[0].title,sourceTasks[0].title);assert.ok(board.items.every(v=>v.status==='Pendiente'&&!v.owner&&!v.due&&!v.notes));assert.notEqual(board.items[0].id,dashboardTemplates.get(savedTemplateId).items[0].id);assert.equal(board.items[1].parent_id,board.items[0].id);assert.equal(dashboards.get(storeA).revision,10);
+});
+await check('existing destination requires explicit confirmation and its current revision',async()=>{
+ const path='dashboard-templates/'+savedTemplateId+'/apply',original=structuredClone(dashboards.get(storeB));
+ assert.equal((await request(path,{method:'POST',body:{store_id:storeB,revision:1}})).status,400);
+ assert.equal((await request(path,{method:'POST',body:{store_id:storeB,revision:2,confirm_replace:true}})).status,409);
+ assert.equal((await request(path,{method:'POST',body:{store_id:storeB,revision:null}})).status,409);assert.deepEqual(dashboards.get(storeB),original);
+ assert.equal((await request(path,{method:'POST',body:{store_id:storeB,revision:1,confirm_replace:true}})).status,200);assert.equal(dashboards.get(storeB).revision,2);assert.notEqual(dashboards.get(storeB).items[0].id,original.items[0].id);
+ assert.equal(dashboardTemplates.get(savedTemplateId).items[0].title,sourceTasks[0].title);
+});
+await check('missing templates and retired destination stores cannot be applied',async()=>{
+ assert.equal((await request('dashboard-templates/'+taskId+'/apply',{method:'POST',body:{store_id:storeB,revision:null}})).status,404);
+ storeRows.find(v=>v.id===storeB).enabled=false;assert.equal((await request('dashboard-templates/'+savedTemplateId+'/apply',{method:'POST',body:{store_id:storeB,revision:2,confirm_replace:true}})).status,404);storeRows.find(v=>v.id===storeB).enabled=true;
+ assert.equal((await (await request('status',{token:null})).json()).features.dashboardTemplates,true);
+});
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

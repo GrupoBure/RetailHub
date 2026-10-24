@@ -23,3 +23,5 @@
 
 .dash-toolbar>select{width:auto;max-width:220px;flex:0 0 auto}.dash-toolbar .search-field{max-width:none}.dash-toolbar>.primary{white-space:nowrap}
 @media(max-width:600px){.dash-toolbar>select{max-width:none;flex:1}}
+
+.dash-template-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 18px}.dash-template-tools small{color:#72848e;font-size:12px}.dash-replace-confirm{display:flex!important;align-items:flex-start;gap:10px!important;padding:14px;background:#fff3e8;border:1px solid #edd5b8;border-radius:9px;font-size:12px;line-height:1.6}.dash-replace-confirm input{width:auto!important;flex-shrink:0;margin-top:4px}
