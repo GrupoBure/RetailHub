@@ -19,6 +19,7 @@ let userStoreIds=[storeA],fileStore='a',folderMoved=false,currentFilename='Prueb
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let documentDeleted=false,dropboxFileDeleted=false,deleteDropboxFailure=false,deleteDatabaseFailure=false,metadataFolder=false,liveFilename='',fileRevision='a1c10ce0dd78';
 let role='reader',disabled=false,published=true,oauthExchanges=0;
+let dashboards=new Map();
 let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
 const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,store_ids:userStoreIds}});
 const reply=(data,status=200)=>new Response(data===null?null:JSON.stringify(data),{status});
@@ -40,6 +41,12 @@ globalThis.fetch=async(url,init={})=>{
  if(init.method==='DELETE'){const old=settings.get(key);settings.delete(key);return reply(old?[{key,value:old}]:[]);}
  if(key)return reply(settings.has(key)?[{value:settings.get(key)}]:[]);
  return reply([...settings].map(([key,value])=>({key,value})));
+ }
+ if(u.pathname==='/rest/v1/rh_dashboards'){
+ const store=u.searchParams.get('store_id')?.slice(3);
+ if(init.method==='POST'){const d=JSON.parse(init.body);if(dashboards.has(d.store_id))return reply([]);dashboards.set(d.store_id,d);return reply([d],201);}
+ if(init.method==='PATCH'){const old=dashboards.get(store);if(!old||old.revision!==Number(u.searchParams.get('revision')?.slice(3)))return reply([]);const d={...old,...JSON.parse(init.body)};dashboards.set(store,d);return reply([d]);}
+ return reply(dashboards.has(store)?[dashboards.get(store)]:[]);
  }
  if(u.pathname==='/rest/v1/rh_stores'){
  if(init.method==='PATCH'){const id=u.searchParams.get('id')?.slice(3);const store=storeRows.find(v=>v.id===id);assert.ok(store);Object.assign(store,JSON.parse(init.body));return reply(null,204);}
@@ -308,5 +315,48 @@ await check('already missing Dropbox files can be removed from the catalog witho
  dropboxFileDeleted=true;const at=calls.length;assert.equal((await request('documents/'+id,{method:'DELETE',body:deleteBody()})).status,200);assert.equal(documentDeleted,true);assert.ok(!calls.slice(at).some(v=>v.url.includes('files/delete_v2')));resetFileDeletion();
 });
 await check('delete capability is advertised for the admin interface',async()=>assert.equal((await (await request('status',{token:null})).json()).features.deleteDocuments,true));
+// Dashboard permissions, validation, isolation and concurrent editing.
+const taskId='cccccccc-cccc-4ccc-8ccc-cccccccccccc',childId='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const item=(changes={})=>({id:taskId,parent_id:null,title:'Crear PDF de planograma',status:'Pendiente',owner:'Víctor',due:'2026-11-01',notes:'Validar medidas',...changes});
+const dashPath='stores/'+storeA+'/dashboard';
+role='reader';disabled=false;userStoreIds=[storeA];storeRows.find(v=>v.id===storeA).enabled=true;
+await check('dashboard requires authentication and the assigned store',async()=>{
+ assert.equal((await request(dashPath,{token:null})).status,401);assert.equal((await request('stores/'+storeB+'/dashboard')).status,404);assert.equal((await request(dashPath)).status,200);
+});
+await check('readers cannot initialize or edit a dashboard',async()=>{
+ for(const method of ['POST','PATCH'])assert.equal((await request(dashPath,{method,body:{revision:null,items:[item()]}})).status,403);assert.equal(dashboards.size,0);
+});
+role='admin';
+await check('administrator initializes a store checklist without Dropbox calls',async()=>{
+ const at=calls.length;const r=await request(dashPath,{method:'POST',body:{revision:null,items:[item()]}});assert.equal(r.status,201);const d=(await r.json()).dashboard;assert.equal(d.revision,1);assert.equal(d.items[0].title,item().title);assert.ok(!calls.slice(at).some(v=>v.url.includes('dropboxapi')));
+});
+await check('initialization retries never overwrite an existing checklist',async()=>{
+ assert.equal((await request(dashPath,{method:'POST',body:{revision:null,items:[]}})).status,409);assert.equal(dashboards.get(storeA).items.length,1);
+});
+await check('all task fields save and other stores retain independent data',async()=>{
+ assert.equal((await request('stores/'+storeB+'/dashboard',{method:'POST',body:{revision:null,items:[]}})).status,201);
+ const task=item({title:'PDF final',status:'Bloqueado',owner:'Itzel',due:'2026-12-02',notes:'Falta aprobación'});
+ const r=await request(dashPath,{method:'PATCH',body:{revision:1,items:[task]}});assert.equal(r.status,200);assert.deepEqual((await r.json()).dashboard.items,[task]);assert.equal(dashboards.get(storeB).items.length,0);
+});
+await check('stale revisions cannot overwrite another administrator changes',async()=>{
+ assert.equal((await request(dashPath,{method:'PATCH',body:{revision:1,items:[]}})).status,409);assert.equal(dashboards.get(storeA).revision,2);assert.equal(dashboards.get(storeA).items[0].title,'PDF final');
+});
+await check('malformed structure, cycles, duplicates, invalid statuses and dates fail safely',async()=>{
+ const invalid=[[item(),item()],[item({parent_id:childId})],[item({parent_id:childId}),item({id:childId,parent_id:taskId})],[item({status:'hack'})],[item({due:'2026-02-30'})],[item({title:' '})],[item({notes:'a'.repeat(2001)})]];
+ for(const items of invalid)assert.equal((await request(dashPath,{method:'PATCH',body:{revision:2,items}})).status,400);assert.equal(dashboards.get(storeA).revision,2);
+});
+await check('dashboard size and hierarchy have bounded limits',async()=>{
+ const many=Array.from({length:501},()=>item({id:crypto.randomUUID()}));assert.equal((await request(dashPath,{method:'PATCH',body:{revision:2,items:many}})).status,400);
+ const deep=[];for(let i=0;i<7;i++)deep.push(item({id:crypto.randomUUID(),parent_id:i?deep[i-1].id:null}));assert.equal((await request(dashPath,{method:'PATCH',body:{revision:2,items:deep}})).status,400);
+ const huge=JSON.stringify({items:'x'.repeat(270000)});assert.equal((await request(dashPath,{method:'PATCH',body:huge})).status,413);
+});
+await check('parent statuses reset while child fields are preserved',async()=>{
+ const tasks=[item({status:'Terminado'}),item({id:childId,parent_id:taskId,status:'En revisión'})];const r=await request(dashPath,{method:'PATCH',body:{revision:2,items:tasks}});assert.equal(r.status,200);const d=(await r.json()).dashboard;assert.equal(d.items[0].status,'Pendiente');assert.equal(d.items[1].status,'En revisión');
+});
+await check('permission revocation and retired stores block dashboard reads and writes',async()=>{
+ role='reader';userStoreIds=[];assert.equal((await request(dashPath)).status,404);userStoreIds=[storeA];storeRows.find(v=>v.id===storeA).enabled=false;assert.equal((await request(dashPath)).status,404);
+ role='admin';assert.equal((await request(dashPath,{method:'PATCH',body:{revision:3,items:[]}})).status,404);storeRows.find(v=>v.id===storeA).enabled=true;
+});
+await check('dashboard capability is advertised',async()=>assert.equal((await (await request('status',{token:null})).json()).features.storeDashboard,true));
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

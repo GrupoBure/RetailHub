@@ -104,3 +104,20 @@ El build `document-delete-1` añade una papelera administrador a cada tarjeta de
 El servidor verifica el administrador vigente, tienda activa, categoría, nombre confirmado y ubicación actual antes de eliminar. Solo acepta metadatos de tipo file. Usa el identificador del archivo y `parent_rev` de Dropbox para limitar la operación a la versión comprobada y evitar eliminar carpetas. Después retira el registro del catálogo. Los tickets previos quedan sin documento disponible. Si Dropbox falla, no se elimina el registro de la base. Si Dropbox ya eliminó el archivo pero falla la limpieza de la base, repetir la operación completa la limpieza sin borrar otro archivo. No se pueden retirar copias ya descargadas.
 
 El endpoint `/status` anuncia `features.deleteDocuments=true`; la papelera se habilita después de detectarlo. Requiere desplegar el archivo completo `server/retailhub-api.ts` y refrescar la página. No requiere SQL ni cambios en los secretos de Dropbox. Se comprobaron 68 casos con servicios simulados, además de tipos y compilación. Probar después del despliegue con archivos desechables; no se han eliminado archivos reales desde el desarrollo.
+
+## Dashboard editable por tienda · store-dashboard-1
+
+1. En el proyecto existente, ejecutar `database/003-dashboard.sql` en SQL Editor (después de `002-tiendas.sql`). No volver a ejecutar la creación del primer administrador.
+2. Reemplazar el archivo completo `index.ts` de la Edge Function `retailhub-api` con `server/retailhub-api.ts` y desplegar. Conservar las conexiones y secretos actuales.
+3. Recargar GitHub Pages con Ctrl+F5. `GET /status` debe mostrar `build: store-dashboard-1` y `features.storeDashboard: true`.
+4. Abrir **Dashboard**, elegir tienda y pulsar **Iniciar con machote** o **Empezar en blanco**. Iniciar es una acción explícita: ver el dashboard no crea datos. El machote incluye las 8 etapas y 64 actividades de `MachoteChecklist_Diseno_Tienda.xlsx`; cada tienda recibe sus propias copias con IDs nuevos y estados pendientes.
+
+Administradores: crear, renombrar, mover entre etapas, ordenar, eliminar con confirmación y añadir subtareas (hasta 6 niveles / 500 elementos / solicitud máxima 256 KiB). Editar responsable, fecha objetivo y notas; estados Pendiente, En proceso, En revisión, Terminado, Bloqueado y No aplica. Lectores: consultar únicamente las tiendas autorizadas; ninguna escritura, ni mediante solicitudes directas.
+
+Los datos se guardan en `rh_dashboards`, una fila privada por tienda, con RLS y sin acceso directo para anon/authenticated. El servidor revalida usuario y tienda en cada solicitud. No se guardan en el Excel, Dropbox ni en localStorage. La eliminación lógica de la tienda impide acceder a su dashboard. Renombrar la tienda conserva el seguimiento mediante su UUID. El dashboard no modifica ni elimina archivos de la biblioteca.
+
+El avance cuenta **solo actividades finales** (elementos sin hijos), con el mismo peso cada una. `No aplica` se excluye del denominador; no mide horas o dificultad. Sin actividades aplicables se muestra «—». Estados de etapas se calculan con sus descendientes: todo terminado → Terminado; todo no aplicable → No aplica; cualquier bloqueo → Bloqueado; actividad en proceso o parcialmente terminada → En proceso; después En revisión y Pendiente. Al convertir una actividad en contenedor su estado guardado vuelve a Pendiente para que quitar sus hijos no restaure un Terminado antiguo.
+
+El guardado usa una revisión entera y actualización condicional. Dos administradores no pueden sobrescribirse silenciosamente: el segundo recibe 409 y debe Actualizar y reaplicar su cambio. La inicialización concurrente ignora conflictos sin reemplazar un dashboard existente. El lector actualiza con el botón Actualizar; no hay sincronización en tiempo real.
+
+Validación local: TypeScript, build de Vite, `server/test-api.mjs` (servicios simulados) y `server/test-dashboard.mjs` (cálculos, jerarquía y orden). La activación y persistencia reales requieren aplicar SQL y función en Supabase.

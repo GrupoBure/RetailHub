@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'document-delete-1';
+const API_BUILD = 'store-dashboard-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -40,7 +40,7 @@ async function bounded(r:Request,max:number){
  while(true){const {done,value}=await reader.read();if(done)break;total+=value.length;if(total>max){await reader.cancel();throw new PortalError(413,'El bloque es demasiado grande.');}parts.push(value);}
  const result=new Uint8Array(total);let at=0;for(const part of parts){result.set(part,at);at+=part.length;}return result;
 }
-async function bodyJSON(r:Request){try{return JSON.parse(new TextDecoder().decode(await bounded(r,16384)));}catch(e){if(e instanceof PortalError)throw e;throw new PortalError(400,'Solicitud no válida.');}}
+async function bodyJSON(r:Request,max=16384){try{return JSON.parse(new TextDecoder().decode(await bounded(r,max)));}catch(e){if(e instanceof PortalError)throw e;throw new PortalError(400,'Solicitud no válida.');}}
 export async function supa(path:string,init:RequestInit={},bearer?:string):Promise<any>{
  const c=config();if(!authReady())throw new PortalError(503,'La conexión de usuarios está pendiente de activación.');
  const h=new Headers(init.headers);h.set('apikey',c.anon!);const auth=bearer||c.service!;if(!auth.startsWith('sb_'))h.set('Authorization','Bearer '+auth);h.set('Content-Type','application/json');
@@ -132,6 +132,23 @@ async function validateStoreIds(value:unknown){
  const rows=await supa('/rest/v1/rh_stores?select=id&id=in.('+ids.join(',')+')&enabled=eq.true');
  if(rows.length!==ids.length)throw new PortalError(400,'Alguna tienda ya no está disponible. Actualiza la lista.');return ids;
 }
+// Dashboard content is private per store. Only administrators may change it.
+const dashboardStates=['Pendiente','En proceso','En revisión','Terminado','Bloqueado','No aplica'];
+export function validateDashboard(value:unknown){
+ if(!Array.isArray(value)||value.length>500)throw new PortalError(400,'El dashboard admite hasta 500 elementos.');
+ const ids=new Set<string>();const items=value.map((v:any)=>{
+ if(!v||typeof v!=='object'||!uuid(v.id)||ids.has(v.id))throw new PortalError(400,'Hay elementos duplicados o no válidos.');ids.add(v.id);
+ const text=(key:string,max:number,required=false)=>{if(typeof v[key]!=='string'||v[key].length>max||(required&&!v[key].trim()))throw new PortalError(400,'Revisa el campo '+key+'.');return v[key].trim();};
+ if(v.parent_id!==null&&!uuid(v.parent_id))throw new PortalError(400,'La etapa seleccionada no es válida.');
+ if(!dashboardStates.includes(v.status))throw new PortalError(400,'Selecciona un estado válido.');
+ const due=text('due',10);if(due&&(!/^\d{4}-\d{2}-\d{2}$/.test(due)||!Number.isFinite(Date.parse(due+'T12:00:00Z'))||new Date(due+'T12:00:00Z').toISOString().slice(0,10)!==due))throw new PortalError(400,'La fecha objetivo no es válida.');
+ return {id:v.id,parent_id:v.parent_id,title:text('title',300,true),status:v.status,owner:text('owner',120),due,notes:text('notes',2000)};
+ });
+ const byId=new Map(items.map(v=>[v.id,v]));
+ for(const item of items){const seen=new Set([item.id]);let parent=item.parent_id,depth=1;while(parent!==null){const node=byId.get(parent);if(!node||seen.has(parent)||++depth>6)throw new PortalError(400,'La estructura debe tener hasta 6 niveles y no puede contener ciclos.');seen.add(parent);parent=node.parent_id;}}
+ return items.map(v=>items.some(c=>c.parent_id===v.id)?{...v,status:'Pendiente'}:v);
+}
+
 async function liveFolder(store:any){const folder=await dbx('files/get_metadata',{path:store.dropbox_id});if(!folderIsStore(folder))throw new PortalError(404,'La carpeta de esta tienda cambió. Sincroniza Dropbox.');return folder;}
 export async function record(e:any,cache=new Map<string,any>()){
  const root=config().root.toLowerCase()+'/';const path=String(e.path_lower||'');
@@ -192,7 +209,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -257,6 +274,26 @@ export async function handle(r:Request){
  // therefore cannot republish this store or reactivate its former assignments.
  await supa('/rest/v1/rh_stores?id=eq.'+store.id,{method:'PATCH',body:JSON.stringify({enabled:false,updated_at:new Date().toISOString()})});
  return json({ok:true});}
+ if(p[0]==='stores'&&p.length===3&&p[2]==='dashboard'&&['GET','POST','PATCH'].includes(method)){
+ // Validate role before processing mutations and always re-check the store grant.
+ if(method!=='GET')membership(user,true);
+ const store=await requireStore(p[1],user);
+ const path='/rest/v1/rh_dashboards';const fields='store_id,revision,items,updated_at';
+ if(method==='GET'){const rows=await supa(path+'?store_id=eq.'+store.id+'&select='+fields);return json({dashboard:rows[0]||null});}
+ const b=await bodyJSON(r,262144);const items=validateDashboard(b.items);let rows;
+ const now=new Date().toISOString();
+ if(method==='POST'){
+ // Ignore conflicts, never overwrite another administrator's initialized store.
+ if(b.revision!==null)throw new PortalError(400,'Actualiza el dashboard antes de iniciar.');
+ rows=await supa(path+'?on_conflict=store_id&select='+fields,{method:'POST',headers:{Prefer:'resolution=ignore-duplicates,return=representation'},body:JSON.stringify({store_id:store.id,revision:1,items,updated_at:now,updated_by:user.id})});
+ }else{
+ if(!Number.isSafeInteger(b.revision)||b.revision<1||b.revision>=2147483647)throw new PortalError(400,'Versión del dashboard no válida.');
+ // Compare-and-swap prevents silent lost updates across tabs/administrators.
+ rows=await supa(path+'?store_id=eq.'+store.id+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({revision:b.revision+1,items,updated_at:now,updated_by:user.id})});
+ }
+ if(!rows?.length)throw new PortalError(409,'Otro administrador modificó este dashboard. Pulsa Actualizar y vuelve a aplicar tu cambio.');
+ return json({dashboard:rows[0]},method==='POST'?201:200);
+ }
  if(route==='documents'&&method==='GET'){
  const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});await requireStore(id,user);
  const fields='id,title,filename,category,size,modified_at,published,store_id';
