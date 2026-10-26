@@ -1,0 +1,57 @@
+-- Machotes de solicitud y eliminación de comparativos sin autorizaciones.
+-- Conserva archivos de Dropbox y registros retirados para recuperación administrativa.
+begin;
+alter table public.rh_quote_boards add column if not exists deleted_at timestamptz;
+create table if not exists public.rh_quote_templates (
+ id uuid primary key default gen_random_uuid(),
+ name text not null check(length(name) between 1 and 100),
+ revision integer not null default 1 check(revision>0),
+ requests jsonb not null check(jsonb_typeof(requests)='array'),
+ request_count integer not null check(request_count between 1 and 300),
+ created_by uuid not null,
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ deleted_at timestamptz
+);
+alter table public.rh_quote_templates enable row level security;
+revoke all on public.rh_quote_templates from public,anon,authenticated;
+grant all on public.rh_quote_templates to service_role;
+create or replace function public.rh_approve_quote(p_board uuid,p_revision integer,p_offer uuid,p_user uuid,p_name text,p_partial boolean)
+returns uuid language plpgsql security definer set search_path=public as $$
+declare b public.rh_quote_boards; chosen jsonb; approval_id uuid; meta jsonb; subtotal bigint;
+begin
+ select * into b from public.rh_quote_boards where id=p_board for update;
+ if not found or b.deleted_at is not null or not b.published or b.revision<>p_revision then raise exception 'quote_conflict'; end if;
+ if not exists(select 1 from public.rh_stores where id=b.store_id and enabled) then raise exception 'quote_access'; end if;
+ select raw_app_meta_data into meta from auth.users where id=p_user;
+ if meta is null or coalesce((meta->>'rh_portal')::boolean,false)=false or coalesce((meta->>'disabled')::boolean,false) then raise exception 'quote_access'; end if;
+ if coalesce(meta->>'role','reader')<>'admin' and (not coalesce(meta->'quote_view_store_ids','[]'::jsonb) @> jsonb_build_array(b.store_id::text) or not coalesce(meta->'quote_approve_store_ids','[]'::jsonb) @> jsonb_build_array(b.store_id::text)) then raise exception 'quote_access'; end if;
+ select value into chosen from jsonb_array_elements(b.data->'offers') where value->>'id'=p_offer::text;
+ if chosen is null or chosen->>'shipping' is null or chosen->>'lead_days' is null or coalesce(chosen->>'lead_basis','')='' then raise exception 'quote_incomplete'; end if;
+ if jsonb_array_length(chosen->'lines')=0 or exists(select 1 from jsonb_array_elements(chosen->'lines') l where l->>'review'<>'confirmed' or l->>'amount' is null or l->>'quantity' is null) then raise exception 'quote_incomplete'; end if;
+ select coalesce(sum((l->>'amount')::bigint),0) into subtotal from jsonb_array_elements(chosen->'lines') l;
+ if chosen->>'reported_subtotal' is not null and abs((chosen->>'reported_subtotal')::bigint-subtotal)>1 then raise exception 'quote_incomplete'; end if;
+ if exists(select 1 from jsonb_array_elements(b.data->'requests') r where (coalesce(r->>'width','')<>'' or coalesce(r->>'height','')<>'') and (coalesce(r->>'unit','')='' or r->>'unit' ~* 'confirmar|pendiente') and exists(select 1 from jsonb_array_elements(chosen->'lines') l where l->>'request_id'=r->>'id')) then raise exception 'quote_incomplete'; end if;
+ if not p_partial and exists(select 1 from jsonb_array_elements(b.data->'requests') r where not exists(select 1 from jsonb_array_elements(chosen->'lines') l where l->>'request_id'=r->>'id' and l->>'amount' is not null)) then raise exception 'quote_partial'; end if;
+ insert into public.rh_quote_approvals(board_id,board_revision,offer_id,approved_by,approved_name,snapshot)
+ values(b.id,b.revision,p_offer,p_user,p_name,jsonb_build_object('data',b.data,'offer_id',p_offer,'partial',p_partial,'files',coalesce((select jsonb_agg(jsonb_build_object('id',id,'filename',filename,'dropbox_id',dropbox_id,'revision',revision)) from public.rh_quote_files where board_id=b.id),'[]'::jsonb))) returning id into approval_id;
+ return approval_id;
+end $$;
+revoke all on function public.rh_approve_quote(uuid,integer,uuid,uuid,text,boolean) from public,anon,authenticated;
+grant execute on function public.rh_approve_quote(uuid,integer,uuid,uuid,text,boolean) to service_role;
+
+create or replace function public.rh_remove_quote(p_board uuid,p_revision integer,p_user uuid)
+returns void language plpgsql security definer set search_path=public as $$
+declare b public.rh_quote_boards; meta jsonb;
+begin
+ select raw_app_meta_data into meta from auth.users where id=p_user;
+ if meta is null or coalesce((meta->>'rh_portal')::boolean,false)=false or coalesce((meta->>'disabled')::boolean,false) or coalesce(meta->>'role','reader')<>'admin' then raise exception 'quote_access'; end if;
+ select * into b from public.rh_quote_boards where id=p_board for update;
+ if not found or b.deleted_at is not null or b.revision<>p_revision then raise exception 'quote_conflict'; end if;
+ if not exists(select 1 from public.rh_stores where id=b.store_id and enabled) then raise exception 'quote_access'; end if;
+ if exists(select 1 from public.rh_quote_approvals where board_id=b.id) then raise exception 'quote_has_approvals'; end if;
+ update public.rh_quote_boards set deleted_at=now(),published=false,revision=revision+1,updated_at=now() where id=b.id;
+end $$;
+revoke all on function public.rh_remove_quote(uuid,integer,uuid) from public,anon,authenticated;
+grant execute on function public.rh_remove_quote(uuid,integer,uuid) to service_role;
+commit;

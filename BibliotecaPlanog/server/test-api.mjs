@@ -19,7 +19,7 @@ let userStoreIds=[storeA],fileStore='a',folderMoved=false,currentFilename='Prueb
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let documentDeleted=false,dropboxFileDeleted=false,deleteDropboxFailure=false,deleteDatabaseFailure=false,metadataFolder=false,liveFilename='',fileRevision='a1c10ce0dd78';
 let role='reader',disabled=false,published=true,oauthExchanges=0;
-let dashboards=new Map(),dashboardTemplates=new Map(),quoteBoards=new Map(),quoteApprovals=[];
+let dashboards=new Map(),dashboardTemplates=new Map(),quoteBoards=new Map(),quoteTemplates=new Map(),quoteApprovals=[];
 let quotePermission=false,quoteViewStores=[],quoteApproveStores=[],quoteFileDbFailure=false;
 const quoteFileRows=new Map(),quoteFileMeta=new Map();
 let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
@@ -47,8 +47,17 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/rest/v1/rh_quote_boards'){
  const id=u.searchParams.get('id')?.slice(3),fields=u.searchParams.get('select')?.split(',');const project=d=>Object.fromEntries((fields||Object.keys(d)).map(k=>[k,d[k]]));
  if(init.method==='POST'){const d={...JSON.parse(init.body),id:crypto.randomUUID(),updated_at:new Date().toISOString()};quoteBoards.set(d.id,d);return reply([project(d)],201);}
- if(init.method==='PATCH'){const old=quoteBoards.get(id);if(!old||old.revision!==Number(u.searchParams.get('revision')?.slice(3)))return reply([]);const d={...old,...JSON.parse(init.body)};quoteBoards.set(id,d);return reply([project(d)]);}
- let rows=[...quoteBoards.values()];if(id)rows=rows.filter(v=>v.id===id);if(u.searchParams.get('store_id'))rows=rows.filter(v=>v.store_id===u.searchParams.get('store_id').slice(3));if(u.searchParams.get('published')==='eq.true')rows=rows.filter(v=>v.published);return reply(rows.map(project));
+ if(init.method==='PATCH'){const old=quoteBoards.get(id);if(!old||old.deleted_at||old.revision!==Number(u.searchParams.get('revision')?.slice(3)))return reply([]);const d={...old,...JSON.parse(init.body)};quoteBoards.set(id,d);return reply([project(d)]);}
+ let rows=[...quoteBoards.values()];if(u.searchParams.get('deleted_at')==='is.null')rows=rows.filter(v=>!v.deleted_at);if(id)rows=rows.filter(v=>v.id===id);if(u.searchParams.get('store_id'))rows=rows.filter(v=>v.store_id===u.searchParams.get('store_id').slice(3));if(u.searchParams.get('published')==='eq.true')rows=rows.filter(v=>v.published);return reply(rows.map(project));
+ }
+ if(u.pathname==='/rest/v1/rpc/rh_remove_quote'){
+ const b=JSON.parse(init.body),board=quoteBoards.get(b.p_board);if(role!=='admin'||disabled)return reply({message:'quote_access'},400);if(!board||board.deleted_at||board.revision!==b.p_revision)return reply({message:'quote_conflict'},400);if(quoteApprovals.some(a=>a.board_id===board.id))return reply({message:'quote_has_approvals'},400);board.deleted_at=new Date().toISOString();board.published=false;board.revision++;return reply(null,204);
+ }
+ if(u.pathname==='/rest/v1/rh_quote_templates'){
+ const fields=u.searchParams.get('select')?.split(','),project=d=>Object.fromEntries((fields||Object.keys(d)).map(k=>[k,d[k]]));const id=u.searchParams.get('id');
+ if(init.method==='POST'){const d={...JSON.parse(init.body),id:crypto.randomUUID(),created_at:new Date().toISOString()};quoteTemplates.set(d.id,d);return reply([project(d)],201);}
+ if(init.method==='PATCH'){const old=quoteTemplates.get(id?.slice(3));if(!old||old.deleted_at||old.revision!==Number(u.searchParams.get('revision')?.slice(3)))return reply([]);Object.assign(old,JSON.parse(init.body));return reply([project(old)]);}
+ let rows=[...quoteTemplates.values()].filter(v=>!v.deleted_at).sort((a,b)=>b.id.localeCompare(a.id));if(id?.startsWith('eq.'))rows=rows.filter(v=>v.id===id.slice(3));if(id?.startsWith('lt.'))rows=rows.filter(v=>v.id<id.slice(3));return reply(rows.slice(0,100).map(project));
  }
  if(u.pathname==='/rest/v1/rh_quote_files'){
  if(init.method==='POST'){if(quoteFileDbFailure){quoteFileDbFailure=false;return reply({},503);}const d=JSON.parse(init.body);quoteFileRows.set(d.id,d);return reply(null,201);}
@@ -57,7 +66,7 @@ globalThis.fetch=async(url,init={})=>{
 
  if(u.pathname==='/rest/v1/rh_quote_approvals')return reply(quoteApprovals.filter(v=>v.board_id===u.searchParams.get('board_id')?.slice(3)&&(!u.searchParams.get('id')||v.id===u.searchParams.get('id').slice(3))).map(v=>u.searchParams.get('select')?.includes('snapshot')?{...v,snapshot:{data:v.snapshot,offer_id:v.offer_id}}:(({snapshot,...rest})=>rest)(v)));
  if(u.pathname==='/rest/v1/rpc/rh_approve_quote'){
- const b=JSON.parse(init.body),board=quoteBoards.get(b.p_board);if(!board||!board.published||board.revision!==b.p_revision||quoteApprovals.some(a=>a.board_id===board.id&&a.board_revision===board.revision))return reply({message:'quote_conflict',code:'23505'},409);
+ const b=JSON.parse(init.body),board=quoteBoards.get(b.p_board);if(!board||board.deleted_at||!board.published||board.revision!==b.p_revision||quoteApprovals.some(a=>a.board_id===board.id&&a.board_revision===board.revision))return reply({message:'quote_conflict',code:'23505'},409);
  assert.equal(b.p_user,uid);const d={id:crypto.randomUUID(),board_id:board.id,board_revision:board.revision,offer_id:b.p_offer,approved_name:b.p_name,approved_at:new Date().toISOString(),snapshot:structuredClone(board.data)};quoteApprovals.push(d);return reply(d.id);
  }
  if(u.pathname==='/rest/v1/rh_dashboard_templates'){
@@ -540,5 +549,36 @@ await check('an explicitly assigned quote approver can approve without access to
  assert.equal((await request('quote-boards/'+fresh.id+'/approve',{method:'POST',body:{revision:1,offer_id:qOfferId,confirm:true}})).status,200);
  assert.equal((await request('documents?store='+storeA)).status,404);role='admin';userStoreIds=[storeA];
 });
+// Reusable request-only templates and deletion preserve financial history.
+let savedQuoteTemplate;
+await check('quote templates are administrator-only, including direct details, edits and removal',async()=>{
+ role='reader';for(const [path,method,body] of [['quote-templates','GET'],['quote-templates','POST',{name:'Base',requests:[qr]}],['quote-templates/'+qr.id,'GET'],['quote-templates/'+qr.id,'PATCH',{}],['quote-templates/'+qr.id,'DELETE',{}]])assert.equal((await request(path,{method,body})).status,403);role='admin';
+});
+await check('saving a quote template strips vendor prices and notes and assigns independent concept IDs',async()=>{
+ const before=structuredClone(quoteBoards.get(qid));const r=await request('quote-templates',{method:'POST',body:{name:'Machote gráficos',requests:qdata.requests,offers:qdata.offers,notes:'Do not copy'}});assert.equal(r.status,201);savedQuoteTemplate=(await r.json()).template;assert.equal(savedQuoteTemplate.request_count,1);assert.equal(savedQuoteTemplate.requests,undefined);const t=quoteTemplates.get(savedQuoteTemplate.id);assert.notEqual(t.requests[0].id,qr.id);assert.equal(t.offers,undefined);assert.equal(t.notes,undefined);assert.deepEqual(quoteBoards.get(qid),before);
+});
+await check('quote template listing hides concept contents and detail remains available for copying',async()=>{
+ const d=await (await request('quote-templates')).json();assert.equal(d.templates[0].requests,undefined);const t=(await (await request('quote-templates/'+savedQuoteTemplate.id)).json()).template;assert.equal(t.requests[0].title,qr.title);assert.equal((await request('quote-templates?before=invalid')).status,400);
+});
+await check('invalid or empty quote templates are rejected',async()=>{
+ for(const body of [{name:'',requests:[qr]},{name:'A',requests:[]},{name:'B',requests:[{...qr,quantity:0}]},{name:'X'.repeat(101),requests:[qr]}])assert.equal((await request('quote-templates',{method:'POST',body})).status,400);
+});
+await check('updating a quote template requires confirmation and an exact revision',async()=>{
+ const path='quote-templates/'+savedQuoteTemplate.id;assert.equal((await request(path,{method:'PATCH',body:{name:'Updated',requests:[qr],revision:1}})).status,400);assert.equal((await request(path,{method:'PATCH',body:{name:'Updated',requests:[qr],revision:1,confirm_replace:true}})).status,200);assert.equal((await request(path,{method:'PATCH',body:{name:'Stale',requests:[qr],revision:1,confirm_replace:true}})).status,409);
+});
+await check('quote template removal requires confirmation, retains its record and never changes existing boards',async()=>{
+ const before=structuredClone(quoteBoards.get(qid)),path='quote-templates/'+savedQuoteTemplate.id;assert.equal((await request(path,{method:'DELETE',body:{confirm_name:'wrong',revision:2}})).status,409);assert.equal((await request(path,{method:'DELETE',body:{confirm_name:'Updated',revision:2}})).status,200);assert.equal((await request(path)).status,404);assert.ok(quoteTemplates.get(savedQuoteTemplate.id).deleted_at);assert.deepEqual(quoteBoards.get(qid),before);
+});
+let removable;
+await check('removing a quote requires administrator role, matching title and exact revision',async()=>{
+ removable=(await (await request('quote-boards',{method:'POST',body:{store_id:storeA,data:qdata}})).json()).board;const path='quote-boards/'+removable.id;role='reader';assert.equal((await request(path,{method:'DELETE',body:{}})).status,404);role='admin';assert.equal((await request(path,{method:'DELETE',body:{confirm_title:'wrong',revision:1}})).status,400);assert.equal((await request(path,{method:'DELETE',body:{confirm_title:removable.title,revision:0}})).status,409);
+});
+await check('retiring an unapproved quote hides details, lists and backups without deleting Dropbox content',async()=>{
+ const file=crypto.randomUUID();quoteFileRows.set(file,{id:file,board_id:removable.id,dropbox_id:'no-access',revision:'r',filename:'original.pdf'});const before=calls.length;assert.equal((await request('quote-boards/'+removable.id,{method:'DELETE',body:{confirm_title:removable.title,revision:1}})).status,200);assert.ok(quoteBoards.get(removable.id).deleted_at);assert.equal((await request('quote-boards/'+removable.id)).status,404);assert.equal((await request('quote-files/'+file+'/link',{method:'POST'})).status,404);const list=(await (await request('quote-boards?store='+storeA)).json()).boards;assert.ok(!list.some(b=>b.id===removable.id));assert.ok(!calls.slice(before).some(c=>c.url.includes('files/delete')));
+});
+await check('an approved quote cannot be removed even after editing a newer draft',async()=>{
+ const b=quoteBoards.get(qid);assert.ok(quoteApprovals.some(a=>a.board_id===qid));assert.equal((await request('quote-boards/'+qid,{method:'DELETE',body:{confirm_title:b.title,revision:b.revision}})).status,409);assert.ok(!quoteBoards.get(qid).deleted_at);assert.equal((await (await request('status',{token:null})).json()).features.quoteTools,true);
+});
+const migration=readFileSync(new URL('../database/007-machotes-cotizaciones.sql',import.meta.url),'utf8');assert.ok(migration.includes('b.deleted_at is not null or not b.published'));assert.ok(migration.includes('where id=p_board for update'));assert.ok(migration.includes('quote_has_approvals'));assert.ok(migration.includes('enable row level security'));
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

@@ -194,3 +194,16 @@ El administrador prepara cada comparativo en cuatro pasos: **Tu solicitud → Pr
 Los borradores se guardan automáticamente después de 1.8 segundos sin cambios; los conceptos editados en una ventana se guardan al pulsar **Aplicar cambio**. No se crean comparativos vacíos sin conceptos ni proveedores. El guardado usa revisión optimista, conserva ediciones realizadas durante una petición y se pausa ante errores para permitir su revisión. También existe **Guardar borrador** manual y aviso del navegador al salir con cambios sin guardar.
 
 Publicar sigue siendo una acción explícita. Al editar una versión ya publicada, el administrador debe pulsar **Guardar borrador** para crear otra versión, que deberá publicar de nuevo. El cliente ve comparación, detalle desplegable y respaldos; los permisos separados por tienda para consulta y autorización se mantienen. Esta actualización solo cambia el frontend, no requiere otra migración ni redeploy de la función.
+
+
+### Machotes de solicitud, captura manual y eliminación
+
+Ejecutar **database/007-machotes-cotizaciones.sql** en el proyecto Biblioteca Retail Hub y desplegar esta versión de **server/retailhub-api.ts** (build `quote-machotes-1`). La página activa estos controles cuando `status.features.quoteTools` está disponible. No se requieren secretos nuevos.
+
+En **Tu solicitud → Guardar solicitud como machote** se guarda únicamente la lista de conceptos, cantidades, materiales y medidas. Se puede crear un machote nuevo o actualizar uno existente con confirmación y revisión optimista. **Usar un machote** crea una copia independiente, con identificadores nuevos, sin proveedores, precios, notas ni respaldos. Los machotes son administrados solo por administradores; pueden eliminarse de la lista conservando los comparativos existentes.
+
+En **Proveedores**, crear un proveedor y pulsar **Usar mi solicitud para capturar precios** genera únicamente los renglones que aún no están relacionados. Los importes comienzan vacíos, los renglones quedan pendientes de revisión y se pueden capturar los precios directamente en la tabla. El lápiz permite ajustar cantidades, materiales, medidas y aclaraciones; se pueden agregar o quitar renglones y proveedores. Quitar un concepto de la solicitud requiere confirmación y quita sus renglones relacionados del borrador. Los subtotales declarados no se alteran automáticamente: si dejan de coincidir deben revisarse. **Importar cotización** conserva la alternativa de extracción de datos; **Adjuntar respaldo** guarda el original en Dropbox (PDF/XLSX/PNG/JPG hasta 20 MB), incluyendo fotos sin extracción OCR.
+
+**Eliminar comparativo** requiere confirmación y acceso administrador. Retira el comparativo del portal y bloquea sus enlaces de respaldo; conserva los archivos en Dropbox. Si existe cualquier autorización histórica, se rechaza la eliminación. La RPC de eliminación bloquea la misma fila que la autorización y la aprobación comprueba `deleted_at`, para serializar ambas acciones. La actualización de borradores/publicación filtra registros retirados y usa revisión optimista. Los registros retirados se conservan en la base para recuperación administrativa.
+
+Todas las ventanas del portal, dashboard y cotizaciones dejan de cerrarse al pulsar el fondo. Conservan la X, Esc y sus acciones explícitas.

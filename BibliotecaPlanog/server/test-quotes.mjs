@@ -5,6 +5,7 @@ const src=readFileSync(new URL(sourceRoot+'quotes-core.ts',import.meta.url),'utf
 const url=s=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
 const coreUrl=url(src),core=await import(coreUrl);
 const modelUrl=url(readFileSync(new URL(sourceRoot+'dashboard-model.ts',import.meta.url),'utf8'));
+const templateHelper=await import(url(readFileSync(new URL(sourceRoot+'quote-template.ts',import.meta.url),'utf8').replace("'./quotes-core'",JSON.stringify(coreUrl)).replace("'./dashboard-model'",JSON.stringify(modelUrl))));
 const importer=await import(url(readFileSync(new URL(sourceRoot+'quote-import.ts',import.meta.url),'utf8').replace("'./quotes-core'",JSON.stringify(coreUrl)).replace("'./dashboard-model'",JSON.stringify(modelUrl))));
 assert.deepEqual(importer.parseDelimited('Descripcion,Cantidad,Total\n"Grafico, PVC",2,60.00'),[['Descripcion','Cantidad','Total'],['Grafico, PVC','2','60.00']]);
 assert.equal(importer.parseNumber('1,5'),1.5);assert.equal(importer.parseNumber('1,000'),1000);assert.equal(importer.parseNumber('$ 1,234.50'),1234.5);assert.equal(importer.parseNumber('1.234,50'),1234.5);assert.equal(importer.parseNumber(''),null);
@@ -12,6 +13,8 @@ assert.equal(importer.guessHeader([['Titulo'],['Grafico','Material','Ancho','Alt
 assert.equal(importer.guessColumns(['Description','Quantity','Amount']).amount,2);
 assert.equal(importer.guessColumns(['Descripcion','Precio unitario']).amount,-1);
 const r={id:crypto.randomUUID(),title:'Gráfico A',material:'PVC 3mm',width:'30',height:'40',quantity:2,unit:'cm',group:'Gráficos'};
+const templateCopy=templateHelper.quoteFromTemplate('Base',[r]);assert.notEqual(templateCopy.requests[0].id,r.id);assert.deepEqual(templateCopy.offers,[]);assert.equal(templateCopy.notes,'');templateCopy.requests[0].quantity=99;assert.equal(r.quantity,2);
+const manualLines=templateHelper.linesFromRequest([r],[]);assert.equal(manualLines[0].amount,null);assert.equal(manualLines[0].review,'pending');assert.equal(manualLines[0].quantity,2);assert.equal(manualLines[0].request_id,r.id);assert.equal(templateHelper.linesFromRequest([r],manualLines).length,0);assert.equal(templateHelper.linesFromRequest([r],[])[0].amount,null);
 assert.equal(importer.suggestMatch('Grafico A',[r]),r.id);assert.equal(importer.suggestMatch('Hoja PVC',[r]),null);
 const map={description:0,quantity:1,amount:2,material:-1,width:-1,height:-1,group:-1};
 let data={title:'Prueba',requests:[r],offers:[],notes:''};const lines=importer.offerRows([['Gráfico A','2','60.00']],map,data);assert.equal(lines[0].amount,6000);assert.equal(lines[0].review,'pending');assert.equal(lines[0].request_id,r.id);

@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'quote-permissions-1';
+const API_BUILD = 'quote-machotes-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -50,6 +50,7 @@ export async function supa(path:string,init:RequestInit={},bearer?:string):Promi
  if(r.status===429)throw new PortalError(429,'Demasiados intentos. Espera unos minutos y vuelve a intentar.');
  if(r.status===401||r.status===403)throw new PortalError(401,'La sesión no es válida. Vuelve a iniciar sesión.');
  if(e.code==='23505'||String(e.message||'').includes('quote_conflict'))throw new PortalError(409,'Este comparativo cambió o ya fue autorizado. Actualiza la página.');
+ if(String(e.message||'').includes('quote_has_approvals'))throw new PortalError(409,'Este comparativo tiene autorizaciones registradas y se conserva como historial.');
  if(String(e.message||'').includes('quote_access'))throw new PortalError(403,'No tienes permiso para autorizar esta tienda.');
  if(String(e.message||'').includes('quote_incomplete')||String(e.message||'').includes('quote_partial'))throw new PortalError(400,'Falta confirmar el alcance, los importes o el plazo de esta propuesta.');
  if(e.code==='email_exists'||e.code==='email_conflict'||e.code==='user_already_exists')throw new PortalError(409,'Ese nombre de usuario ya está en uso. Elige otro.');
@@ -268,7 +269,7 @@ export function validateQData(value:any):QData{
 
 function checkedQuote(value:any){try{return validateQData(value);}catch(e){throw new PortalError(400,(e as Error).message);}}
 
-async function quoteBoardFor(id:unknown,user:any){if(!uuid(id))throw new PortalError(404,'Comparativo no disponible.');const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+id+'&select=id,store_id,published');const board=rows[0];if(!board||!board.published&&user.app_metadata.role!=='admin')throw new PortalError(404,'Comparativo no disponible.');const store=await requireStore(board.store_id,user,'quotes');return {board,store};}
+async function quoteBoardFor(id:unknown,user:any){if(!uuid(id))throw new PortalError(404,'Comparativo no disponible.');const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+id+'&deleted_at=is.null&select=id,store_id,published');const board=rows[0];if(!board||!board.published&&user.app_metadata.role!=='admin')throw new PortalError(404,'Comparativo no disponible.');const store=await requireStore(board.store_id,user,'quotes');return {board,store};}
 async function quoteFileFor(id:string,user:any){if(!uuid(id))throw new PortalError(404,'Respaldo no disponible.');const rows=await supa('/rest/v1/rh_quote_files?id=eq.'+id+'&select=id,board_id,dropbox_id,filename,revision');const file=rows[0];if(!file)throw new PortalError(404,'Respaldo no disponible.');const {store}=await quoteBoardFor(file.board_id,user);const [folder,meta]=await Promise.all([liveFolder(store),dbx('files/get_metadata',{path:file.dropbox_id})]);if(meta['.tag']!=='file'||meta.rev!==file.revision||!String(meta.path_lower||'').startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(404,'El respaldo cambió de ubicación.');return file;}
 
 export async function handle(r:Request){
@@ -276,7 +277,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -363,33 +364,61 @@ export async function handle(r:Request){
  }
  throw new PortalError(404,'Ruta no encontrada.');
  }
+ if(p[0]==='quote-templates'){
+ membership(user,true);const fields='id,name,revision,request_count,created_at,updated_at';
+ if(route==='quote-templates'&&method==='GET'){
+ const before=new URL(r.url).searchParams.get('before');if(before&&!uuid(before))throw new PortalError(400,'Página de machotes no válida.');
+ const rows=await supa('/rest/v1/rh_quote_templates?deleted_at=is.null&select='+fields+'&order=id.desc&limit=100'+(before?'&id=lt.'+before:''));return json({templates:rows,next:rows.length===100?rows.at(-1).id:null});
+ }
+ if(route==='quote-templates'&&method==='POST'||p.length===2&&method==='PATCH'){
+ if(method==='PATCH'&&!uuid(p[1]))throw new PortalError(404,'Machote no disponible.');
+ const b=await bodyJSON(r,2097152);const name=typeof b.name==='string'?b.name.trim():'';if(!name||name.length>100)throw new PortalError(400,'Escribe un nombre de hasta 100 caracteres para el machote.');
+ const data=checkedQuote({title:name,notes:'',offers:[],requests:b.requests});if(!data.requests.length)throw new PortalError(400,'Agrega al menos un concepto para guardar un machote.');
+ const requests=data.requests.map(v=>({...v,id:crypto.randomUUID()}));
+ if(method==='POST'){const rows=await supa('/rest/v1/rh_quote_templates?select='+fields,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({name,requests,request_count:requests.length,created_by:user.id,revision:1})});return json({template:rows[0]},201);}
+ if(!Number.isSafeInteger(b.revision)||b.revision<1||b.confirm_replace!==true)throw new PortalError(400,'Confirma que deseas actualizar este machote.');
+ const rows=await supa('/rest/v1/rh_quote_templates?id=eq.'+p[1]+'&deleted_at=is.null&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({name,requests,request_count:requests.length,revision:b.revision+1,updated_at:new Date().toISOString()})});if(!rows.length)throw new PortalError(409,'El machote cambió. Vuelve a abrir la lista.');return json({template:rows[0]});
+ }
+ if(p.length===2&&uuid(p[1])&&method==='GET'){
+ const rows=await supa('/rest/v1/rh_quote_templates?id=eq.'+p[1]+'&deleted_at=is.null&select='+fields+',requests');if(!rows[0])throw new PortalError(404,'Machote no disponible.');return json({template:rows[0]});
+ }
+ if(p.length===2&&uuid(p[1])&&method==='DELETE'){
+ const b=await bodyJSON(r);const rows=await supa('/rest/v1/rh_quote_templates?id=eq.'+p[1]+'&deleted_at=is.null&select=name,revision');if(!rows[0])throw new PortalError(404,'Machote no disponible.');if(b.confirm_name!==rows[0].name||b.revision!==rows[0].revision)throw new PortalError(409,'Confirma el nombre y la versión actual del machote.');
+ const deleted=await supa('/rest/v1/rh_quote_templates?id=eq.'+p[1]+'&deleted_at=is.null&revision=eq.'+b.revision+'&select=id',{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({deleted_at:new Date().toISOString(),revision:b.revision+1})});if(!deleted.length)throw new PortalError(409,'El machote cambió. Vuelve a abrir la lista.');return json({ok:true});
+ }
+ throw new PortalError(404,'Ruta no encontrada.');
+ }
  if(p[0]==='quote-boards'){
  const fields='id,store_id,title,revision,published,data,updated_at';
  if(route==='quote-boards'&&method==='GET'){
  const store=await requireStore(new URL(r.url).searchParams.get('store'),user,'quotes');
- return json({boards:await supa('/rest/v1/rh_quote_boards?store_id=eq.'+store.id+'&select=id,title,revision,published,updated_at&order=updated_at.desc&limit=200'+(user.app_metadata.role==='admin'?'':'&published=eq.true'))});
+ return json({boards:await supa('/rest/v1/rh_quote_boards?store_id=eq.'+store.id+'&deleted_at=is.null&select=id,title,revision,published,updated_at&order=updated_at.desc&limit=200'+(user.app_metadata.role==='admin'?'':'&published=eq.true'))});
  }
  if(route==='quote-boards'&&method==='POST'){
  membership(user,true);const b=await bodyJSON(r,2097152);const store=await requireStore(b.store_id,user,'quotes');const data=checkedQuote(b.data);
  const rows=await supa('/rest/v1/rh_quote_boards?select='+fields,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({store_id:store.id,title:data.title,data,published:false,revision:1})});return json({board:rows[0]},201);
  }
  if(!uuid(p[1]))throw new PortalError(404,'Comparativo no disponible.');
- const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+p[1]+'&select='+fields);const board=rows[0];if(!board||(!board.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Comparativo no disponible.');await requireStore(board.store_id,user,'quotes');
+ const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+p[1]+'&deleted_at=is.null&select='+fields);const board=rows[0];if(!board||(!board.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Comparativo no disponible.');await requireStore(board.store_id,user,'quotes');
  if(p.length===4&&p[2]==='approvals'&&method==='GET'){
  if(!uuid(p[3]))throw new PortalError(404,'Autorización no disponible.');const rows=await supa('/rest/v1/rh_quote_approvals?board_id=eq.'+board.id+'&id=eq.'+p[3]+'&select=id,board_revision,offer_id,approved_name,approved_at,snapshot');if(!rows[0])throw new PortalError(404,'Autorización no disponible.');return json({approval:rows[0]});
  }
  if(p.length===2&&method==='GET'){
  const approvals=await supa('/rest/v1/rh_quote_approvals?board_id=eq.'+board.id+'&select=id,board_revision,offer_id,approved_name,approved_at&order=approved_at.desc');const files=await supa('/rest/v1/rh_quote_files?board_id=eq.'+board.id+'&select=id,filename,created_at&order=created_at.asc');return json({board,approvals,files});
  }
+ if(p.length===2&&method==='DELETE'){
+ membership(user,true);const b=await bodyJSON(r);if(b.confirm_title!==board.title)throw new PortalError(400,'Confirma el nombre del comparativo.');if(b.revision!==board.revision)throw new PortalError(409,'El comparativo cambió. Actualiza antes de eliminar.');
+ await supa('/rest/v1/rpc/rh_remove_quote',{method:'POST',body:JSON.stringify({p_board:board.id,p_revision:board.revision,p_user:user.id})});return json({ok:true});
+ }
  if(p.length===2&&method==='PATCH'){
  membership(user,true);const b=await bodyJSON(r,2097152);if(!Number.isSafeInteger(b.revision)||b.revision!==board.revision)throw new PortalError(409,'El comparativo cambió. Actualiza antes de editar.');const data=checkedQuote(b.data);
- const updated=await supa('/rest/v1/rh_quote_boards?id=eq.'+board.id+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({data,title:data.title,published:false,revision:b.revision+1,updated_at:new Date().toISOString()})});
+ const updated=await supa('/rest/v1/rh_quote_boards?id=eq.'+board.id+'&deleted_at=is.null&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({data,title:data.title,published:false,revision:b.revision+1,updated_at:new Date().toISOString()})});
  if(!updated?.length)throw new PortalError(409,'El comparativo cambió. Actualiza antes de editar.');return json({board:updated[0]});
  }
  if(p.length===3&&p[2]==='publish'&&method==='POST'){
  membership(user,true);const b=await bodyJSON(r);if(b.revision!==board.revision)throw new PortalError(409,'El comparativo cambió. Actualiza antes de publicar.');
  if(!board.data.requests?.length||!board.data.offers?.length)throw new PortalError(400,'Agrega la solicitud y al menos un proveedor.');
- const updated=await supa('/rest/v1/rh_quote_boards?id=eq.'+board.id+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({published:true})});if(!updated?.length)throw new PortalError(409,'El comparativo cambió. Actualiza antes de publicar.');return json({board:updated[0]});
+ const updated=await supa('/rest/v1/rh_quote_boards?id=eq.'+board.id+'&deleted_at=is.null&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({published:true})});if(!updated?.length)throw new PortalError(409,'El comparativo cambió. Actualiza antes de publicar.');return json({board:updated[0]});
  }
  if(p.length===3&&p[2]==='approve'&&method==='POST'){
  if(user.app_metadata.role!=='admin'&&!quoteStoreIds(user,true).includes(board.store_id))throw new PortalError(403,'Tu usuario puede consultar, pero no autorizar cotizaciones.');
