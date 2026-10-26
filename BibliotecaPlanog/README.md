@@ -216,3 +216,8 @@ Volver al navegador revalida la sesión en segundo plano. Una respuesta `/me` co
 El revalidador evita peticiones simultáneas y descarta resultados después de desmontar o cambiar de usuario. Los errores temporales (red, 429 o 5xx) mantienen la sesión y las capturas abiertas, con un aviso. Solo 401/403 en la comprobación de sesión retiran el acceso; los cambios reales de rol o permisos siguen aplicándose. La renovación del token tampoco cierra la sesión por un fallo temporal. Las acciones del servidor siguen validando Auth y permisos en cada petición.
 
 Validación: `node server/test-session.mjs`, comprobación TypeScript y build; prueba de navegador del portal con servicios simulados conservando capturas sin aplicar en cotizaciones, dashboard y usuarios al disparar el evento de retorno, error temporal y revocación real de permisos en el simulador. Esta corrección solo cambia el frontend y no requiere SQL ni desplegar otra función.
+
+
+### Lista de solicitud compacta
+
+La solicitud se presenta en un panel de ancho acotado con columnas de concepto, material, medidas, cantidad y acciones. Los encabezados por grupo respetan el orden original de la solicitud; la numeración sigue la posición original aunque se filtre. La búsqueda ignora acentos y permite buscar por concepto, material o grupo. El filtro y la búsqueda son solo de visualización; seleccionar una unidad sigue aplicándose a toda la solicitud. El panel conserva las acciones para importar, editar, quitar y guardar machotes. La tabla tiene encabezado fijo y desplazamiento propio. No cambia la base de datos ni los permisos.
