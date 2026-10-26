@@ -6,7 +6,8 @@ const url=s=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(s,{co
 const coreUrl=url(src),core=await import(coreUrl);
 const modelUrl=url(readFileSync(new URL(sourceRoot+'dashboard-model.ts',import.meta.url),'utf8'));
 const templateHelper=await import(url(readFileSync(new URL(sourceRoot+'quote-template.ts',import.meta.url),'utf8').replace("'./quotes-core'",JSON.stringify(coreUrl)).replace("'./dashboard-model'",JSON.stringify(modelUrl))));
-const importer=await import(url(readFileSync(new URL(sourceRoot+'quote-import.ts',import.meta.url),'utf8').replace("'./quotes-core'",JSON.stringify(coreUrl)).replace("'./dashboard-model'",JSON.stringify(modelUrl))));
+const unitsUrl=url(readFileSync(new URL(sourceRoot+'quote-units.ts',import.meta.url),'utf8'));const units=await import(unitsUrl);
+const importer=await import(url(readFileSync(new URL(sourceRoot+'quote-import.ts',import.meta.url),'utf8').replace("'./quote-units'",JSON.stringify(unitsUrl)).replace("'./quotes-core'",JSON.stringify(coreUrl)).replace("'./dashboard-model'",JSON.stringify(modelUrl))));
 assert.deepEqual(importer.parseDelimited('Descripcion,Cantidad,Total\n"Grafico, PVC",2,60.00'),[['Descripcion','Cantidad','Total'],['Grafico, PVC','2','60.00']]);
 assert.equal(importer.parseNumber('1,5'),1.5);assert.equal(importer.parseNumber('1,000'),1000);assert.equal(importer.parseNumber('$ 1,234.50'),1234.5);assert.equal(importer.parseNumber('1.234,50'),1234.5);assert.equal(importer.parseNumber(''),null);
 assert.equal(importer.guessHeader([['Titulo'],['Grafico','Material','Ancho','Alto','Cantidad','DescInt']]),1);
@@ -26,6 +27,19 @@ assert.ok(core.qTotals(data,{...offer,lines:[{...offer.lines[0],quantity:1.5}]})
 assert.equal(core.validateQData(data).offers[0].lines[0].amount,6000);
 assert.ok(core.qTotals({...data,requests:[{...r,unit:'Por confirmar'}]},offer).errors.includes('Unidades de medida por confirmar'));
 assert.throws(()=>core.validateQData({...data,offers:[{...offer,lines:[{...offer.lines[0],amount:1.111}]}]}));
+// Import dimensions conservatively: retain explicit units and ask only for missing axes.
+const umap={description:0,material:1,width:2,height:3,quantity:4,group:-1,amount:-1,unit:5};
+const mixed=importer.requestRows([['A','PVC 3 mm','200','100','1','cm'],['B','PVC 3 mm','2','1','1','m']],umap);
+assert.equal(mixed[0].unit,'cm');assert.equal(mixed[0].width,'200');assert.equal(mixed[1].unit,'m');assert.equal(mixed[1].width,'2');assert.ok(!mixed.some(units.needsRequestUnits));
+const hmap=importer.guessColumns(['Concepto','Material','Ancho (cm)','Alto (m)','Cantidad']);assert.equal(hmap.width,2);assert.equal(hmap.height,3);
+const axisMixed=importer.requestRows([['A','PVC','200','2','1']],hmap,['Concepto','Material','Ancho (cm)','Alto (m)','Cantidad'])[0];assert.equal(axisMixed.unit,'Por eje');assert.equal(axisMixed.width,'200 cm');assert.equal(axisMixed.height,'2 m');assert.equal(units.needsRequestUnits(axisMixed),false);
+const inline=importer.requestRows([['A','PVC','200 cm','100 cm','1']],{...umap,unit:-1})[0];assert.equal(inline.width,'200');assert.equal(inline.height,'100');assert.equal(inline.unit,'cm');
+const partial=importer.requestRows([['A','PVC 3 mm','200 cm','2','1']],{...umap,unit:-1})[0];assert.equal(partial.unit,'Por confirmar');assert.equal(partial.width,'200 cm');assert.deepEqual(units.missingUnitAxes(partial),['height']);
+const fixed=units.resolveRequestUnits([partial,mixed[0]],[{id:partial.id,width:'m',height:'m'}]);assert.equal(fixed[0].width,'200 cm');assert.equal(fixed[0].height,'2 m');assert.equal(fixed[0].unit,'Por eje');assert.equal(fixed[1],mixed[0]);
+const unknown=importer.requestRows([['A','PVC 3 mm','200','100','1']],{...umap,unit:-1})[0];assert.equal(unknown.unit,'Por confirmar');assert.equal(units.needsRequestUnits(unknown),true);assert.deepEqual(units.resolveRequestUnits([unknown],[]),[unknown]);assert.doesNotThrow(()=>core.validateQData({title:'Borrador sin unidades',requests:[unknown],offers:[],notes:''}));
+const custom=units.resolveRequestUnits([unknown],[{id:unknown.id,width:'puntos',height:'puntos'}])[0];assert.equal(custom.unit,'puntos');assert.equal(units.needsRequestUnits(custom),false);assert.equal(custom.width,'200');assert.equal(custom.height,'100');
+const explicitBeatsHeader=importer.requestRows([['A','PVC','2 m','1 m','1']],{...umap,unit:-1},['Concepto','Material','Ancho (cm)','Alto (cm)','Cantidad'])[0];assert.equal(explicitBeatsHeader.unit,'m');assert.equal(explicitBeatsHeader.width,'2');assert.equal(explicitBeatsHeader.height,'1');
+assert.equal(units.headerUnit('Ancho total'),'');assert.equal(units.headerUnit('Ancho (cm)'),'cm');assert.equal(units.cleanUnit('piezas'),'');
 const server=readFileSync(new URL('./retailhub-api.ts',import.meta.url),'utf8');assert.ok(server.includes(src.trim()),'Standalone server validation must match the client calculations.');
 if(process.argv[2]){const packet=JSON.parse(readFileSync(process.argv[2],'utf8'));const parsed=core.validateQData(packet.data),t=core.qTotals(parsed,parsed.offers[0]);assert.equal(t.subtotal,parsed.offers[0].reported_subtotal);console.log('Private import validated:',parsed.requests.length,'requested concepts,',parsed.offers[0].lines.length,'quoted concepts.');}
 console.log('Quote calculations, parsing, header detection, matching and validation passed.');

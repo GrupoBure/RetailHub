@@ -220,4 +220,13 @@ Validación: `node server/test-session.mjs`, comprobación TypeScript y build; p
 
 ### Lista de solicitud compacta
 
-La solicitud se presenta en un panel de ancho acotado con columnas de concepto, material, medidas, cantidad y acciones. Los encabezados por grupo respetan el orden original de la solicitud; la numeración sigue la posición original aunque se filtre. La búsqueda ignora acentos y permite buscar por concepto, material o grupo. El filtro y la búsqueda son solo de visualización; seleccionar una unidad sigue aplicándose a toda la solicitud. El panel conserva las acciones para importar, editar, quitar y guardar machotes. La tabla tiene encabezado fijo y desplazamiento propio. No cambia la base de datos ni los permisos.
+La solicitud se presenta en un panel de ancho acotado con columnas de concepto, material, medidas, cantidad y acciones. Los encabezados por grupo respetan el orden original de la solicitud; la numeración sigue la posición original aunque se filtre. La búsqueda ignora acentos y permite buscar por concepto, material o grupo. El filtro y la búsqueda son solo de visualización; las unidades se definen por concepto y por eje cuando hace falta, sin aplicarlas a toda la solicitud. El panel conserva las acciones para importar, editar, quitar y guardar machotes. La tabla tiene encabezado fijo y desplazamiento propio. No cambia la base de datos ni los permisos.
+
+
+### Cotizaciones: unidades por concepto y pasos compactos
+
+Los cuatro pasos comparten ancho acotado, tablas compactas y secciones organizadas. Proveedores reúne identificación y elaboración, importes y condiciones. La revisión permite buscar y filtrar por proveedor; la comparación conserva sus validaciones y permisos.
+
+La importación de solicitudes respeta las unidades explícitas en encabezados, columnas de unidad o valores de ancho/alto. Nunca convierte los números ni deduce la unidad a partir del espesor del material. Si faltan unidades, pregunta solo por esos campos, con sugerencias y texto libre por concepto. Admite unidades distintas en ancho y alto. **Omitir por ahora** conserva la captura como borrador con unidades pendientes; pueden completarse después desde **Unidades pendientes** o el lápiz. No se requiere completar unidades para guardar un borrador. Las validaciones existentes de autorización se mantienen.
+
+Validación: pruebas de importación, preservación de unidades explícitas, ejes mixtos, resolución selectiva y omisión; TypeScript y build de producción. Esta actualización no requiere SQL ni desplegar la función.
