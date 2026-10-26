@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'dashboard-templates-1';
+const API_BUILD = 'quotes-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -49,6 +49,9 @@ export async function supa(path:string,init:RequestInit={},bearer?:string):Promi
  if(!r.ok){const e=await r.json().catch(()=>({})) as any;
  if(r.status===429)throw new PortalError(429,'Demasiados intentos. Espera unos minutos y vuelve a intentar.');
  if(r.status===401||r.status===403)throw new PortalError(401,'La sesión no es válida. Vuelve a iniciar sesión.');
+ if(e.code==='23505'||String(e.message||'').includes('quote_conflict'))throw new PortalError(409,'Este comparativo cambió o ya fue autorizado. Actualiza la página.');
+ if(String(e.message||'').includes('quote_access'))throw new PortalError(403,'No tienes permiso para autorizar esta tienda.');
+ if(String(e.message||'').includes('quote_incomplete')||String(e.message||'').includes('quote_partial'))throw new PortalError(400,'Falta confirmar el alcance, los importes o el plazo de esta propuesta.');
  if(e.code==='email_exists'||e.code==='email_conflict'||e.code==='user_already_exists')throw new PortalError(409,'Ese nombre de usuario ya está en uso. Elige otro.');
  if(e.code==='42P01'||e.code==='PGRST205')throw new PortalError(503,'Falta preparar la base de datos. Revisa Conexiones.');
  throw new PortalError(400,'No se pudo completar la operación en la cuenta de usuarios.');}
@@ -58,7 +61,7 @@ export async function requireUser(r:Request,admin=false){
  const t=bearer(r);if(!t)throw new PortalError(401,'Inicia sesión para continuar.');
  return membership(await supa('/auth/v1/user',{},t),admin);
 }
-export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u)});
+export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),quote_approval:u.app_metadata?.quote_approval===true});
 export function username(v:unknown){if(typeof v!=='string'||!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(v.toLowerCase()))throw new PortalError(400,'Usa de 3 a 40 letras sin acentos, números, puntos o guiones para el usuario.');return v.toLowerCase();}
 const email=(v:unknown)=>username(v)+'@usuarios.retailhub.invalid';
 export {email};
@@ -223,12 +226,49 @@ async function ticketUser(r:Request,id:string){
  return membership(await supa('/auth/v1/admin/users/'+data.uid));
 }
 
+export type QRequest={id:string;title:string;material:string;width:string;height:string;quantity:number;unit:string;group:string};
+export type QLine={id:string;request_id:string|null;description:string;material:string;width:string;height:string;quantity:number|null;amount:number|null;review:'pending'|'confirmed'|'clarify';note:string};
+export type QOffer={id:string;supplier:string;lead_days:number|null;lead_basis:string;terms:string;source:string;reported_subtotal:number|null;tax_bp:number;shipping:number|null;lines:QLine[]};
+export type QData={title:string;requests:QRequest[];offers:QOffer[];notes:string};
+export const qNormalize=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+export function qIssues(request:QRequest,line:QLine){const issues:string[]=[];if(line.quantity!==request.quantity)issues.push('Cantidad distinta o sin confirmar');if(line.material&&qNormalize(line.material)!==qNormalize(request.material))issues.push('Material distinto');if(line.width&&line.width!==request.width||line.height&&line.height!==request.height)issues.push('Medidas distintas');return issues;}
+export function qTotals(data:QData,offer:QOffer){
+ const priced=offer.lines.filter(l=>l.amount!==null);const subtotal=priced.reduce((n,l)=>n+l.amount!,0),tax=Math.round(subtotal*offer.tax_bp/10000),total=subtotal+tax+(offer.shipping??0);
+ const covered=new Set(priced.filter(l=>l.request_id).map(l=>l.request_id));const missing=data.requests.filter(r=>!covered.has(r.id));
+ const errors:string[]=[];if(offer.shipping===null)errors.push('Envío por confirmar');if(offer.lines.some(l=>l.quantity===null))errors.push('Hay cantidades por confirmar');if(!priced.length)errors.push('Sin conceptos con precio');if(offer.lines.some(l=>l.amount===null))errors.push('Hay conceptos sin importe');
+ if(offer.lines.some(l=>l.review!=='confirmed'))errors.push('Hay conceptos pendientes de revisión');
+ if(offer.lines.some(l=>l.request_id&&qIssues(data.requests.find(r=>r.id===l.request_id)!,l).length&&!l.note.trim()))errors.push('Hay diferencias sin aclaración');
+ if(offer.reported_subtotal!==null&&Math.abs(offer.reported_subtotal-subtotal)>1)errors.push('Los importes no coinciden con el subtotal del proveedor');
+ if(offer.lead_days===null||!offer.lead_basis.trim())errors.push('Tiempo de elaboración por confirmar');
+ return {subtotal,tax,total,missing,errors,extras:priced.filter(l=>l.request_id===null).length};
+}
+export function validateQData(value:any):QData{
+ const fail=(message:string):never=>{throw Error(message);};
+ const text=(v:any,max:number,required=false)=>typeof v==='string'&&v.length<=max&&(!required||!!v.trim())?v.trim():fail('Revisa los textos y campos obligatorios.');
+ const id=(v:any)=>typeof v==='string'&&/^[a-f0-9-]{36}$/i.test(v)?v:fail('Identificador no válido.');
+ const num=(v:any,min:number,max:number)=>typeof v==='number'&&Number.isFinite(v)&&v>=min&&v<=max?v:fail('Cantidad o importe no válido.');
+ const cents=(v:any)=>Number.isSafeInteger(v)?num(v,0,100000000000):fail('Usa importes válidos con hasta dos decimales.');
+ if(!value||!Array.isArray(value.requests)||value.requests.length>300||!Array.isArray(value.offers)||value.offers.length>10)fail('Máximo 300 conceptos y 10 proveedores por comparativo.');
+ const ids=new Set<string>(),unique=(v:any)=>{const key=id(v);if(ids.has(key))fail('Hay identificadores duplicados.');ids.add(key);return key;};
+ const requests:QRequest[]=value.requests.map((r:any)=>({id:unique(r.id),title:text(r.title,300,true),material:text(r.material,200),width:text(r.width,30),height:text(r.height,30),quantity:num(r.quantity,0.0001,1000000),unit:text(r.unit,60),group:text(r.group,100)}));
+ const requestIds=new Set(requests.map(r=>r.id));
+ const offers:QOffer[]=value.offers.map((o:any)=>{if(!Array.isArray(o.lines)||o.lines.length>400)fail('Máximo 400 renglones por proveedor.');const mapped=new Set<string>();
+ const lines:QLine[]=o.lines.map((l:any)=>{const ref=l.request_id===null?null:id(l.request_id);if(ref&&(!requestIds.has(ref)||mapped.has(ref)))fail('Cada renglón debe corresponder a un concepto distinto de la solicitud.');if(ref)mapped.add(ref);if(!['pending','confirmed','clarify'].includes(l.review))fail('Estado de revisión no válido.');return {id:unique(l.id),request_id:ref,description:text(l.description,500,true),material:text(l.material,200),width:text(l.width,30),height:text(l.height,30),quantity:l.quantity===null?null:num(l.quantity,0.0001,1000000),amount:l.amount===null?null:cents(l.amount),review:l.review,note:text(l.note,1500)};});
+ return {id:unique(o.id),supplier:text(o.supplier,150,true),lead_days:o.lead_days===null?null:num(o.lead_days,0,1000),lead_basis:text(o.lead_basis,200),terms:text(o.terms,2000),source:text(o.source,200),reported_subtotal:o.reported_subtotal===null?null:cents(o.reported_subtotal),tax_bp:num(o.tax_bp,0,10000),shipping:o.shipping===null?null:cents(o.shipping),lines};});
+ return {title:text(value.title,200,true),notes:text(value.notes,3000),requests,offers};
+}
+
+function checkedQuote(value:any){try{return validateQData(value);}catch(e){throw new PortalError(400,(e as Error).message);}}
+
+async function quoteBoardFor(id:unknown,user:any){if(!uuid(id))throw new PortalError(404,'Comparativo no disponible.');const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+id+'&select=id,store_id,published');const board=rows[0];if(!board||!board.published&&user.app_metadata.role!=='admin')throw new PortalError(404,'Comparativo no disponible.');const store=await requireStore(board.store_id,user);return {board,store};}
+async function quoteFileFor(id:string,user:any){if(!uuid(id))throw new PortalError(404,'Respaldo no disponible.');const rows=await supa('/rest/v1/rh_quote_files?id=eq.'+id+'&select=id,board_id,dropbox_id,filename,revision');const file=rows[0];if(!file)throw new PortalError(404,'Respaldo no disponible.');const {store}=await quoteBoardFor(file.board_id,user);const [folder,meta]=await Promise.all([liveFolder(store),dbx('files/get_metadata',{path:file.dropbox_id})]);if(meta['.tag']!=='file'||meta.rev!==file.revision||!String(meta.path_lower||'').startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(404,'El respaldo cambió de ubicación.');return file;}
+
 export async function handle(r:Request){
  try{
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -261,6 +301,10 @@ export async function handle(r:Request){
  const headers=new Headers({...cors,'Content-Type':fileMime(d.filename),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Accept-Ranges':'bytes','Content-Disposition':`${d.category==='Listados'||new URL(r.url).searchParams.has('download')?'attachment':'inline'}; filename="documento.${d.filename.split('.').at(-1)}"; filename*=UTF-8''${encodeURIComponent(d.filename).replace(/'/g,'%27')}`});
  for(const k of ['content-length','content-range'])if(upstream.headers.has(k))headers.set(k,upstream.headers.get(k)!);
  return new Response(upstream.body,{status:upstream.status,headers});}
+ if(p[0]==='quote-files'&&p.length===3&&p[2]==='file'&&method==='GET'){
+ const token=new URL(r.url).searchParams.get('ticket')||'';if(!token||token.length>100)throw new PortalError(403,'Enlace no válido.');let saved:any;try{saved=JSON.parse(await setting('file:'+await digest(token))||'null');}catch{}
+ if(!saved||saved.qfile!==p[1]||saved.expires<Date.now())throw new PortalError(403,'El enlace venció. Abre otra vez el respaldo.');const caller=membership(await supa('/auth/v1/admin/users/'+saved.uid));const file=await quoteFileFor(p[1],caller);const upstream=await content('files/download',{path:file.dropbox_id});return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(file.filename).replace(/'/g,'%27'),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}});
+ }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
  if(route==='stores'&&method==='GET'){
@@ -293,6 +337,61 @@ export async function handle(r:Request){
  // therefore cannot republish this store or reactivate its former assignments.
  await supa('/rest/v1/rh_stores?id=eq.'+store.id,{method:'PATCH',body:JSON.stringify({enabled:false,updated_at:new Date().toISOString()})});
  return json({ok:true});}
+ if(p[0]==='quote-files'){
+ if(p.length===3&&p[2]==='link'&&method==='POST'){await quoteFileFor(p[1],user);const token=crypto.randomUUID()+crypto.randomUUID();await transient('file:'+await digest(token),{qfile:p[1],uid:user.id,expires:Date.now()+900000});return json({url:endpoint(r)+'/quote-files/'+p[1]+'/file?ticket='+token});}
+ membership(user,true);
+ if(route==='quote-files/start'&&method==='POST'){
+ const b=await bodyJSON(r);const {board,store}=await quoteBoardFor(b.board_id,user);const name=typeof b.filename==='string'?b.filename.normalize('NFC'):'';
+ if(!name||name.length>150||/[\/\\\u0000-\u001f]/.test(name)||!/^.+\.(pdf|xlsx|png|jpe?g)$/i.test(name)||!Number.isSafeInteger(b.size)||b.size<1||b.size>20000000)throw new PortalError(400,'Adjunta PDF, XLSX, PNG o JPG de hasta 20 MB.');
+ const folder=await liveFolder(store),path=folder.path_display+'/cotizaciones';try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const existing=await dbx('files/get_metadata',{path});if(existing['.tag']!=='folder')throw new PortalError(400,'La carpeta de cotizaciones no está disponible.');}
+ const id=crypto.randomUUID(),upstream=await content('files/upload_session/start',{close:false},new Uint8Array());const d=await upstream.json();const ticket=await seal('quote-upload',{id,uid:user.id,board_id:board.id,store_id:store.id,filename:name,size:b.size,sid:d.session_id,path:path+'/'+id+'_'+name,expires:Date.now()+3600000});return json({ticket});
+ }
+ if((route==='quote-files/chunk'||route==='quote-files/finish')&&method==='POST'){
+ const t=await unseal('quote-upload',r.headers.get('X-Upload-Ticket')||'');if(t.uid!==user.id)throw new PortalError(403,'Sesión de carga no válida.');const {store}=await quoteBoardFor(t.board_id,user);const folder=await liveFolder(store);if(!String(t.path).toLowerCase().startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(409,'La tienda cambió. Inicia otra vez la carga.');const offset=Number(r.headers.get('X-Upload-Offset'));if(!Number.isSafeInteger(offset)||offset<0||offset>t.size)throw new PortalError(400,'Posición de carga no válida.');
+ const bytes=await bounded(r,8*1024*1024);if(offset+bytes.length>t.size)throw new PortalError(413,'El respaldo supera el tamaño esperado.');
+ if(route==='quote-files/chunk'){await content('files/upload_session/append_v2',{cursor:{session_id:t.sid,offset},close:false},bytes);return json({ok:true});}
+ if(offset!==t.size||bytes.length)throw new PortalError(400,'La carga está incompleta.');
+ let meta:any;try{meta=await dbx('files/get_metadata',{path:t.path});}catch(error){if(!(error instanceof DropboxNotFound))throw error;}if(!meta){const response=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:false,mute:false}},new Uint8Array());meta=await response.json();}if(meta['.tag']!=='file'||typeof meta.rev!=='string')throw new PortalError(409,'El destino del respaldo no es un archivo.');await supa('/rest/v1/rh_quote_files?on_conflict=id',{method:'POST',headers:{Prefer:'resolution=ignore-duplicates'},body:JSON.stringify({id:t.id,board_id:t.board_id,dropbox_id:meta.id,revision:meta.rev,filename:t.filename})});return json({ok:true});
+ }
+ throw new PortalError(404,'Ruta no encontrada.');
+ }
+ if(p[0]==='quote-boards'){
+ const fields='id,store_id,title,revision,published,data,updated_at';
+ if(route==='quote-boards'&&method==='GET'){
+ const store=await requireStore(new URL(r.url).searchParams.get('store'),user);
+ return json({boards:await supa('/rest/v1/rh_quote_boards?store_id=eq.'+store.id+'&select=id,title,revision,published,updated_at&order=updated_at.desc&limit=200'+(user.app_metadata.role==='admin'?'':'&published=eq.true'))});
+ }
+ if(route==='quote-boards'&&method==='POST'){
+ membership(user,true);const b=await bodyJSON(r,2097152);const store=await requireStore(b.store_id,user);const data=checkedQuote(b.data);
+ const rows=await supa('/rest/v1/rh_quote_boards?select='+fields,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({store_id:store.id,title:data.title,data,published:false,revision:1})});return json({board:rows[0]},201);
+ }
+ if(!uuid(p[1]))throw new PortalError(404,'Comparativo no disponible.');
+ const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+p[1]+'&select='+fields);const board=rows[0];if(!board||(!board.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Comparativo no disponible.');await requireStore(board.store_id,user);
+ if(p.length===4&&p[2]==='approvals'&&method==='GET'){
+ if(!uuid(p[3]))throw new PortalError(404,'Autorización no disponible.');const rows=await supa('/rest/v1/rh_quote_approvals?board_id=eq.'+board.id+'&id=eq.'+p[3]+'&select=id,board_revision,offer_id,approved_name,approved_at,snapshot');if(!rows[0])throw new PortalError(404,'Autorización no disponible.');return json({approval:rows[0]});
+ }
+ if(p.length===2&&method==='GET'){
+ const approvals=await supa('/rest/v1/rh_quote_approvals?board_id=eq.'+board.id+'&select=id,board_revision,offer_id,approved_name,approved_at&order=approved_at.desc');const files=await supa('/rest/v1/rh_quote_files?board_id=eq.'+board.id+'&select=id,filename,created_at&order=created_at.asc');return json({board,approvals,files});
+ }
+ if(p.length===2&&method==='PATCH'){
+ membership(user,true);const b=await bodyJSON(r,2097152);if(!Number.isSafeInteger(b.revision)||b.revision!==board.revision)throw new PortalError(409,'El comparativo cambió. Actualiza antes de editar.');const data=checkedQuote(b.data);
+ const updated=await supa('/rest/v1/rh_quote_boards?id=eq.'+board.id+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({data,title:data.title,published:false,revision:b.revision+1,updated_at:new Date().toISOString()})});
+ if(!updated?.length)throw new PortalError(409,'El comparativo cambió. Actualiza antes de editar.');return json({board:updated[0]});
+ }
+ if(p.length===3&&p[2]==='publish'&&method==='POST'){
+ membership(user,true);const b=await bodyJSON(r);if(b.revision!==board.revision)throw new PortalError(409,'El comparativo cambió. Actualiza antes de publicar.');
+ if(!board.data.requests?.length||!board.data.offers?.length)throw new PortalError(400,'Agrega la solicitud y al menos un proveedor.');
+ const updated=await supa('/rest/v1/rh_quote_boards?id=eq.'+board.id+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({published:true})});if(!updated?.length)throw new PortalError(409,'El comparativo cambió. Actualiza antes de publicar.');return json({board:updated[0]});
+ }
+ if(p.length===3&&p[2]==='approve'&&method==='POST'){
+ if(user.app_metadata.role!=='admin'&&user.app_metadata.quote_approval!==true)throw new PortalError(403,'Tu usuario puede consultar, pero no autorizar cotizaciones.');
+ const b=await bodyJSON(r);if(!board.published||b.revision!==board.revision)throw new PortalError(409,'La versión del comparativo cambió. Actualiza antes de autorizar.');
+ const data=checkedQuote(board.data),offer=data.offers.find(v=>v.id===b.offer_id);if(!offer)throw new PortalError(404,'Proveedor no disponible.');const totals=qTotals(data,offer);
+ if(totals.errors.length)throw new PortalError(400,totals.errors.join('. '));if(b.confirm!==true||totals.missing.length&&b.confirm_partial!==true)throw new PortalError(400,'Confirma la autorización y los conceptos que quedan fuera.');
+ const approval=await supa('/rest/v1/rpc/rh_approve_quote',{method:'POST',body:JSON.stringify({p_board:board.id,p_revision:board.revision,p_offer:offer.id,p_user:user.id,p_name:safeUser(user).name,p_partial:totals.missing.length>0})});return json({ok:true,approval});
+ }
+ throw new PortalError(404,'Ruta no encontrada.');
+ }
  if(p[0]==='dashboard-templates'){
  membership(user,true);
  if(route==='dashboard-templates'&&method==='GET'){
@@ -378,7 +477,7 @@ export async function handle(r:Request){
  return json({users:all.filter(u=>u.app_metadata?.rh_portal).map(safeUser)});}
  if(route==='users'&&method==='POST'){
  const b:any=await bodyJSON(r);const assignedStores=await validateStoreIds(b.store_ids??[]);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
- const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,store_ids:assignedStores}})});
+ const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,quote_approval:b.quote_approval===true,store_ids:assignedStores}})});
  return json({user:safeUser(u)},201);}
  if(p[0]==='users'&&p.length===2&&(method==='PATCH'||method==='DELETE')){
  if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Usuario no encontrado.');
@@ -394,6 +493,7 @@ export async function handle(r:Request){
  if(b.name!==undefined){if(typeof b.name!=='string'||!b.name.trim()||b.name.trim().length>100)throw new PortalError(400,'Escribe un nombre de hasta 100 caracteres.');changes.user_metadata={...target.user_metadata,name:b.name.trim()};}
  if(b.role!==undefined&&b.role!=='admin'&&b.role!=='reader')throw new PortalError(400,'Permisos no válidos.');
  if(b.store_ids!==undefined)changes.app_metadata={...target.app_metadata,store_ids:await validateStoreIds(b.store_ids)};
+ if(b.quote_approval!==undefined){if(typeof b.quote_approval!=='boolean')throw new PortalError(400,'Permiso de autorización no válido.');changes.app_metadata={...(changes.app_metadata||target.app_metadata),quote_approval:b.quote_approval};}
  if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
  if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de entre 12 y 256 caracteres.');changes.password=b.password;}
  if(!Object.keys(changes).length)throw new PortalError(400,'No hay cambios para guardar.');

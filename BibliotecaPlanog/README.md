@@ -133,3 +133,39 @@ En la tienda de destino, **Usar machote guardado** permite elegir uno de los mac
 Los machotes se guardan en `rh_dashboard_templates`, protegida con RLS, sin permisos directos de anon/authenticated. Solo administradores activos pueden listar, guardar y aplicar; la tienda origen/destino debe estar activa. Son machotes compartidos entre los administradores del portal, no entre los lectores. La lista se pagina por UUID y solo devuelve nombre, fecha y cantidad de elementos; las estructuras permanecen en el servidor hasta su aplicación. Guardar repetidamente crea copias separadas, nunca sobrescribe un machote por coincidencia del nombre. El selector distingue copias por fecha y hora.
 
 No se copian documentos, usuarios ni permisos de tienda. No se crean enlaces públicos ni archivos en Dropbox. Validación adicional: pruebas de snapshots inmutables, limpieza de campos, independencia de IDs/jerarquía, lectura protegida, confirmación de reemplazo y revisión del destino. Las pruebas usan servicios simulados; la persistencia real requiere activar tabla y función.
+
+## Cotizaciones y autorizaciones · quotes-1
+
+Activación en el proyecto existente:
+
+1. Ejecutar `database/005-cotizaciones.sql` en SQL Editor. Crea tablas privadas y la función transaccional de autorización; no modifica bibliotecas, usuarios ni dashboards existentes.
+2. Reemplazar el archivo completo de la Edge Function con `server/retailhub-api.ts` y desplegar. Conservar secretos y configuración JWT existentes. `/status` anuncia `build: quotes-1` y `features.quotes: true`.
+3. Recargar GitHub Pages. Abrir **Cotizaciones**, elegir tienda y crear un comparativo. **Importar expediente** admite un JSON privado con `format: retailhub-quotes-1`, `store_hint` opcional y `data` conforme a `src/quotes-core.ts`. El expediente se entrega de forma privada; no se incluye información real de proveedores en este repositorio.
+4. Guardar borrador y revisar solicitud, proveedores, importes y equivalencias. Publicar al cliente cuando corresponda. Cada edición vuelve a borrador e incrementa la revisión. Las autorizaciones previas se conservan, pero no aprueban automáticamente la versión nueva.
+5. En Usuarios, editar al lector autorizado, asignar sus tiendas y activar **Puede autorizar cotizaciones de sus tiendas asignadas**. Los demás lectores solo consultan. Los administradores también pueden autorizar.
+
+### Importación y comparación
+
+XLSX (primera hoja), CSV, TSV/TXT delimitado y PDF con texto seleccionable, hasta 20 MB; PDF hasta 50 páginas. El XLSX se lee en el navegador con un límite de 40 MB descomprimidos. PDF.js se empaqueta con la aplicación y no envía el documento a un servicio de IA. El usuario selecciona encabezados y columnas y revisa la vista previa. PDF escaneado o imagen necesita captura/transcripción; no hay OCR ni equivalencias semánticas automáticas en esta versión. Las tablas de PDF pueden necesitar correcciones manuales.
+
+Las coincidencias se proponen por nombres normalizados y descripciones previamente confirmadas dentro del mismo comparativo. Se requiere revisar; la importación nunca confirma equivalencias automáticamente. Cada renglón se puede relacionar con un concepto común, dejar como adicional o marcar por aclarar. Se preservan nombres, especificaciones, cantidad solicitada/cotizada y notas. No se puede relacionar dos renglones del mismo proveedor con un concepto sin consolidarlos antes. Un concepto sin precio no se cuenta como cero. El precio unitario se muestra solo cuando coinciden cantidades; las diferencias requieren aclaración explícita.
+
+Moneda: MXN. Importes enteros en centavos, cantidades numéricas, IVA en puntos base. Los importes importados son **totales de renglón antes de IVA**. Se compara el subtotal calculado contra el declarado por el proveedor; una diferencia de más de un centavo impide autorizar. El envío se captura como importe final con impuestos y no se vuelve a gravar; si está vacío, se muestra Por confirmar y no se considera gratuito. El plazo requiere días y condición de inicio (hábiles/naturales, anticipo, aprobación de artes, etc.). No se convierte un plazo desconocido en cero ni se calcula una fecha de entrega inventada.
+
+El menor importe se marca solo entre dos o más renglones revisados sin diferencias de cantidad, material o medidas. No se declara un proveedor ganador por un total que cubra menos conceptos. La comparación tiene búsqueda, filtro por grupo y paginación de 25 conceptos. Máximo 300 conceptos solicitados y 10 proveedores con hasta 400 renglones cada uno, dentro del límite de 2 MiB por solicitud.
+
+### Autorización e historial
+
+Solo usuarios activos con acceso a la tienda y rol admin o `app_metadata.quote_approval: true` pueden autorizar. El servidor vuelve a consultar Auth en cada solicitud. El botón requiere versión publicada/guardada, plazo y envío confirmados, importes válidos y revisiones resueltas. Si faltan conceptos, el usuario debe aceptar expresamente el alcance parcial y ve la lista excluida. Autorizar registra una decisión dentro del portal; no envía pedidos ni realiza pagos.
+
+`rh_approve_quote` bloquea la fila durante la operación, comprueba revisión/publicación, usuario y tienda, y registra una sola autorización por versión con usuario, fecha, proveedor y copia de los datos aprobados. Una edición simultánea no puede cambiar silenciosamente la versión autorizada. **Ver lo autorizado** muestra la copia guardada, no los precios actuales. Las tablas y RPC tienen RLS/permisos restringidos a service_role; anon/authenticated no acceden directamente.
+
+### Respaldos privados
+
+La extracción de datos y la conservación del original son acciones separadas. Después de guardar, **Adjuntar respaldo** sube PDF, XLSX, PNG o JPG (máximo 20 MB) en bloques de 8 MiB a Dropbox: `Retail Hub/Portal/<tienda>/cotizaciones/<UUID>_<archivo>`. La biblioteca de planogramas/listados no sincroniza esta carpeta ni cambia sus formatos permitidos. Los archivos se sirven como descarga, nunca como HTML ejecutable. No hay acción de eliminación de respaldos en esta versión.
+
+Los enlaces expiran a los 15 minutos. Solo se almacena el hash del ticket; cada descarga revalida usuario, publicación, tienda, ubicación del archivo y su revisión de Dropbox. Si un original cambia externamente, el enlace deja de servirlo como si fuese el original guardado. El historial incluye los identificadores y revisiones de respaldos existentes al autorizar. Una repetición de finish después de fallo de catálogo reutiliza el archivo ya subido. Como los PDF de biblioteca, estas transferencias consumen egress de Supabase aunque los archivos residan en Dropbox.
+
+### Verificación
+
+TypeScript y Vite; `server/test-api.mjs` con servicios simulados (permisos, publicación, versiones, importes, faltantes, autorización, historial, respaldo y revocaciones); `server/test-quotes.mjs` para cálculos, formatos numéricos, encabezados, equivalencias y validación; pruebas de pantalla con un API local simulado, XLSX original y PDF de prueba con texto. No equivalen a una autorización o transferencia real en las cuentas del usuario. La persistencia real requiere ejecutar SQL, desplegar función y hacer la primera importación desde una sesión del administrador.

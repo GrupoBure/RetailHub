@@ -19,9 +19,11 @@ let userStoreIds=[storeA],fileStore='a',folderMoved=false,currentFilename='Prueb
 const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a',path_lower:'/retail hub/portal/tienda a'},{id:storeB,name:'Tienda B',enabled:true,dropbox_id:'id:store-b',path_lower:'/retail hub/portal/tienda b'}];
 let documentDeleted=false,dropboxFileDeleted=false,deleteDropboxFailure=false,deleteDatabaseFailure=false,metadataFolder=false,liveFilename='',fileRevision='a1c10ce0dd78';
 let role='reader',disabled=false,published=true,oauthExchanges=0;
-let dashboards=new Map(),dashboardTemplates=new Map();
+let dashboards=new Map(),dashboardTemplates=new Map(),quoteBoards=new Map(),quoteApprovals=[];
+let quotePermission=false,quoteFileDbFailure=false;
+const quoteFileRows=new Map(),quoteFileMeta=new Map();
 let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
-const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,store_ids:userStoreIds}});
+const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,quote_approval:quotePermission,store_ids:userStoreIds}});
 const reply=(data,status=200)=>new Response(data===null?null:JSON.stringify(data),{status});
 globalThis.fetch=async(url,init={})=>{
  url=String(url);calls.push({url,init});const u=new URL(url);
@@ -29,7 +31,7 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/auth/v1/token')return reply({user:user(),access_token:'valid',refresh_token:'rotated',expires_in:3600});
  if(u.pathname==='/auth/v1/admin/users'&&init.method==='POST')return reply({id:otherId,...JSON.parse(init.body)});
  if(u.pathname.startsWith('/auth/v1/admin/users/')){
- const targetId=u.pathname.split('/').at(-1);if(targetId===uid)return reply(user());
+ const targetId=u.pathname.split('/').at(-1);if(targetId===uid){if(init.method==='PUT'){const change=JSON.parse(init.body);if(change.app_metadata?.quote_approval!==undefined)quotePermission=change.app_metadata.quote_approval;return reply({...user(),...change});}return reply(user());}
  if(targetDeleted||targetId!==otherId)return reply({},404);
  if(init.method==='DELETE'){targetDeleted=true;return reply(target);}
  if(init.method==='PUT'){const change=JSON.parse(init.body);if(change.email==='duplicado@usuarios.retailhub.invalid')return reply({code:'email_exists'},422);target={...target,...change};return reply(target);}
@@ -41,6 +43,22 @@ globalThis.fetch=async(url,init={})=>{
  if(init.method==='DELETE'){const old=settings.get(key);settings.delete(key);return reply(old?[{key,value:old}]:[]);}
  if(key)return reply(settings.has(key)?[{value:settings.get(key)}]:[]);
  return reply([...settings].map(([key,value])=>({key,value})));
+ }
+ if(u.pathname==='/rest/v1/rh_quote_boards'){
+ const id=u.searchParams.get('id')?.slice(3),fields=u.searchParams.get('select')?.split(',');const project=d=>Object.fromEntries((fields||Object.keys(d)).map(k=>[k,d[k]]));
+ if(init.method==='POST'){const d={...JSON.parse(init.body),id:crypto.randomUUID(),updated_at:new Date().toISOString()};quoteBoards.set(d.id,d);return reply([project(d)],201);}
+ if(init.method==='PATCH'){const old=quoteBoards.get(id);if(!old||old.revision!==Number(u.searchParams.get('revision')?.slice(3)))return reply([]);const d={...old,...JSON.parse(init.body)};quoteBoards.set(id,d);return reply([project(d)]);}
+ let rows=[...quoteBoards.values()];if(id)rows=rows.filter(v=>v.id===id);if(u.searchParams.get('store_id'))rows=rows.filter(v=>v.store_id===u.searchParams.get('store_id').slice(3));if(u.searchParams.get('published')==='eq.true')rows=rows.filter(v=>v.published);return reply(rows.map(project));
+ }
+ if(u.pathname==='/rest/v1/rh_quote_files'){
+ if(init.method==='POST'){if(quoteFileDbFailure){quoteFileDbFailure=false;return reply({},503);}const d=JSON.parse(init.body);quoteFileRows.set(d.id,d);return reply(null,201);}
+ let rows=[...quoteFileRows.values()];if(u.searchParams.get('id'))rows=rows.filter(v=>v.id===u.searchParams.get('id').slice(3));if(u.searchParams.get('board_id'))rows=rows.filter(v=>v.board_id===u.searchParams.get('board_id').slice(3));return reply(rows);
+ }
+
+ if(u.pathname==='/rest/v1/rh_quote_approvals')return reply(quoteApprovals.filter(v=>v.board_id===u.searchParams.get('board_id')?.slice(3)&&(!u.searchParams.get('id')||v.id===u.searchParams.get('id').slice(3))).map(v=>u.searchParams.get('select')?.includes('snapshot')?{...v,snapshot:{data:v.snapshot,offer_id:v.offer_id}}:(({snapshot,...rest})=>rest)(v)));
+ if(u.pathname==='/rest/v1/rpc/rh_approve_quote'){
+ const b=JSON.parse(init.body),board=quoteBoards.get(b.p_board);if(!board||!board.published||board.revision!==b.p_revision||quoteApprovals.some(a=>a.board_id===board.id&&a.board_revision===board.revision))return reply({message:'quote_conflict',code:'23505'},409);
+ assert.equal(b.p_user,uid);const d={id:crypto.randomUUID(),board_id:board.id,board_revision:board.revision,offer_id:b.p_offer,approved_name:b.p_name,approved_at:new Date().toISOString(),snapshot:structuredClone(board.data)};quoteApprovals.push(d);return reply(d.id);
  }
  if(u.pathname==='/rest/v1/rh_dashboard_templates'){
  const fields=u.searchParams.get('select')?.split(',');
@@ -77,6 +95,8 @@ globalThis.fetch=async(url,init={})=>{
  }
  if(u.pathname==='/2/files/get_metadata'){
  const path=JSON.parse(init.body).path;
+ if(quoteFileMeta.has(path))return reply(quoteFileMeta.get(path));
+ if(path.toLowerCase().includes('/cotizaciones/')&&!createdFolders.has(path.toLowerCase()))return reply({error_summary:'path/not_found/'},409);
  if(path==='id:pdf'&&dropboxFileDeleted)return reply({error_summary:'path/not_found/'},409);
  if(path==='id:pdf')return reply({'.tag':metadataFolder?'folder':'file',id:'id:pdf',rev:fileRevision,name:liveFilename||currentFilename,path_lower:(folderOverrides.get('id:store-'+fileStore)?.path_lower||'/retail hub/portal/tienda '+fileStore)+'/'+currentSection.toLowerCase()+'/'+currentFilename.toLowerCase()});
  const store=storeRows.find(v=>v.dropbox_id===path||v.path_lower===path.toLowerCase());if(store&&folderOverrides.has(store.dropbox_id))return reply(folderOverrides.get(store.dropbox_id));if(store)return reply({'.tag':'folder',id:store.dropbox_id,name:store.name,path_lower:folderMoved?'/otra carpeta/'+store.name:store.path_lower,path_display:'/Retail Hub/Portal/'+store.name});
@@ -99,7 +119,7 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/2/files/upload_session/start')return reply({session_id:'upload-id'});
  if(u.pathname==='/2/files/upload_session/append_v2')return reply(null,200);
  if(u.pathname==='/2/files/upload_session/finish'){
- const path=JSON.parse(new Headers(init.headers).get('Dropbox-API-Arg')).commit.path;return reply({'.tag':'file',id:'id:pdf',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path,size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
+ const path=JSON.parse(new Headers(init.headers).get('Dropbox-API-Arg')).commit.path;if(path.toLowerCase().includes('/cotizaciones/')){const meta={'.tag':'file',id:'id:quote-'+crypto.randomUUID(),rev:'a1b2c3d4e5f6',name:path.split('/').at(-1),path_lower:path.toLowerCase()};quoteFileMeta.set(path,meta);quoteFileMeta.set(meta.id,meta);return reply(meta);}return reply({'.tag':'file',id:'id:pdf',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path,size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
  }
  if(u.pathname==='/2/files/download'){const range=new Headers(init.headers).get('range');return new Response('%PDF-test',{status:range?206:200,headers:range?{'content-range':'bytes 0-8/9'}:{}});}
  throw Error('Unexpected mock request: '+url);
@@ -407,6 +427,81 @@ await check('missing templates and retired destination stores cannot be applied'
  assert.equal((await request('dashboard-templates/'+taskId+'/apply',{method:'POST',body:{store_id:storeB,revision:null}})).status,404);
  storeRows.find(v=>v.id===storeB).enabled=false;assert.equal((await request('dashboard-templates/'+savedTemplateId+'/apply',{method:'POST',body:{store_id:storeB,revision:2,confirm_replace:true}})).status,404);storeRows.find(v=>v.id===storeB).enabled=true;
  assert.equal((await (await request('status',{token:null})).json()).features.dashboardTemplates,true);
+});
+// Quotes: authoritative amounts, scoped access, publication, revisions and approvals.
+const qr={id:crypto.randomUUID(),title:'Gráfico',material:'PVC 3 mm',width:'30',height:'40',quantity:2,unit:'cm',group:'Gráficos'};
+const qOfferId=crypto.randomUUID();
+const qOffer={id:qOfferId,supplier:'Proveedor prueba',lead_days:5,lead_basis:'Hábiles desde anticipo',terms:'Pago acordado',source:'prueba.xlsx',reported_subtotal:6000,tax_bp:1600,shipping:0,lines:[{id:crypto.randomUUID(),request_id:qr.id,description:'Gráfico PVC',material:qr.material,width:qr.width,height:qr.height,quantity:2,amount:6000,review:'confirmed',note:''}]};
+const qdata={title:'Comparativo prueba',requests:[qr],offers:[qOffer],notes:''};let qid;
+role='reader';quotePermission=false;userStoreIds=[storeA];
+await check('readers cannot create quote boards or enable their own approval permission',async()=>{
+ assert.equal((await request('quote-boards',{method:'POST',body:{store_id:storeA,data:qdata}})).status,403);assert.equal((await request('users/'+uid,{method:'PATCH',body:{quote_approval:true}})).status,403);
+ assert.equal((await request('quote-boards?store='+storeB)).status,404);
+});
+role='admin';
+await check('new quote boards start private drafts and retain integer cents',async()=>{
+ const r=await request('quote-boards',{method:'POST',body:{store_id:storeA,data:qdata}});assert.equal(r.status,201);const d=(await r.json()).board;qid=d.id;assert.equal(d.published,false);assert.equal(d.revision,1);assert.equal(d.data.offers[0].lines[0].amount,6000);
+});
+await check('invalid money, duplicate mappings and fabricated concept IDs are rejected',async()=>{
+ for(const change of [d=>{d.offers[0].lines[0].amount=1.111;},d=>{d.offers[0].lines[0].amount=-100;},d=>{d.offers[0].lines.push({...d.offers[0].lines[0],id:crypto.randomUUID()});},d=>{d.offers[0].lines[0].request_id=crypto.randomUUID();}]){const d=structuredClone(qdata);change(d);assert.equal((await request('quote-boards/'+qid,{method:'PATCH',body:{revision:1,data:d}})).status,400);}
+});
+await check('drafts are invisible to readers including direct URLs',async()=>{
+ role='reader';assert.equal((await request('quote-boards/'+qid)).status,404);assert.equal((await (await request('quote-boards?store='+storeA)).json()).boards.length,0);role='admin';
+});
+await check('publication requires admin and the exact compared revision',async()=>{
+ assert.equal((await request('quote-boards/'+qid+'/publish',{method:'POST',body:{revision:0}})).status,409);assert.equal((await request('quote-boards/'+qid+'/publish',{method:'POST',body:{revision:1}})).status,200);
+ role='reader';assert.equal((await request('quote-boards/'+qid)).status,200);assert.equal((await request('quote-boards/'+qid+'/publish',{method:'POST',body:{revision:1}})).status,403);
+});
+await check('approval requires a fresh explicit permission, store grant and confirmation',async()=>{
+ const path='quote-boards/'+qid+'/approve',body={revision:1,offer_id:qOfferId,confirm:true};
+ assert.equal((await request(path,{method:'POST',body})).status,403);quotePermission=true;userStoreIds=[];assert.equal((await request(path,{method:'POST',body})).status,404);userStoreIds=[storeA];
+ assert.equal((await request(path,{method:'POST',body:{...body,confirm:false}})).status,400);assert.equal((await request(path,{method:'POST',body:{...body,revision:0}})).status,409);
+ assert.equal((await request(path,{method:'POST',body})).status,200);assert.equal(quoteApprovals.length,1);assert.equal(quoteApprovals[0].approved_name,'victor');
+ assert.equal((await request(path,{method:'POST',body})).status,409);role='admin';
+});
+await check('edits create a new unpublished revision and preserve old approvals',async()=>{
+ const changed=structuredClone(qdata);changed.offers[0].lines[0].amount=9000;changed.offers[0].reported_subtotal=9000;
+ assert.equal((await request('quote-boards/'+qid,{method:'PATCH',body:{revision:1,data:changed}})).status,200);assert.equal(quoteBoards.get(qid).revision,2);assert.equal(quoteBoards.get(qid).published,false);assert.equal(quoteApprovals[0].snapshot.offers[0].lines[0].amount,6000);
+ assert.equal((await request('quote-boards/'+qid,{method:'PATCH',body:{revision:1,data:qdata}})).status,409);
+});
+await check('unknown delivery, shipping, mismatched subtotal and unresolved differences block approvals',async()=>{
+ const board=quoteBoards.get(qid);board.published=true;
+ for(const change of [o=>{o.lead_days=null;},o=>{o.shipping=null;},o=>{o.reported_subtotal=50;},o=>{o.lines[0].review='clarify';},o=>{o.lines[0].quantity=1.5;}]){board.data=structuredClone(qdata);change(board.data.offers[0]);assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{revision:2,offer_id:qOfferId,confirm:true}})).status,400);}
+});
+await check('partial coverage is never counted as zero and requires explicit acceptance',async()=>{
+ const board=quoteBoards.get(qid);board.data=structuredClone(qdata);board.data.requests.push({...qr,id:crypto.randomUUID(),title:'Lona pendiente'});
+ const t=apiModule.qTotals(board.data,board.data.offers[0]);assert.equal(t.missing.length,1);assert.equal(t.total,6960);
+ const body={revision:2,offer_id:qOfferId,confirm:true};assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body})).status,400);assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{...body,confirm_partial:true}})).status,200);
+});
+await check('retiring stores and revoking approver permission take effect immediately',async()=>{
+ role='reader';quotePermission=false;assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{}})).status,403);storeRows.find(v=>v.id===storeA).enabled=false;assert.equal((await request('quote-boards/'+qid)).status,404);storeRows.find(v=>v.id===storeA).enabled=true;role='admin';
+});
+await check('admin can assign approval without changing other trusted metadata',async()=>{
+ const r=await request('users/'+uid,{method:'PATCH',body:{quote_approval:true}});assert.equal(r.status,200);const last=calls.filter(v=>v.url.endsWith('/auth/v1/admin/users/'+uid)&&v.init.method==='PUT').at(-1);assert.equal(JSON.parse(last.init.body).app_metadata.quote_approval,true);
+ assert.equal((await (await request('status',{token:null})).json()).features.quotes,true);
+});
+let backupTicket,backupId,backupUrl;
+await check('quote backups require admin and reject invalid names, file types and sizes',async()=>{
+ role='reader';assert.equal((await request('quote-files/start',{method:'POST',body:{board_id:qid,filename:'a.pdf',size:5}})).status,403);role='admin';
+ for(const [filename,size]of [['../a.pdf',5],['a.html',5],['a.pdf',20000001],['a.pdf',0]])assert.equal((await request('quote-files/start',{method:'POST',body:{board_id:qid,filename,size}})).status,400);
+});
+await check('quote backups stream in chunks and recover catalog writes without uploading twice',async()=>{
+ const r=await request('quote-files/start',{method:'POST',body:{board_id:qid,filename:'Respaldo prueba.pdf',size:5}});assert.equal(r.status,200);backupTicket=(await r.json()).ticket;
+ const headers={'X-Upload-Ticket':backupTicket,'X-Upload-Offset':'0'};assert.equal((await request('quote-files/chunk',{method:'POST',headers,body:new Uint8Array([37,80,68,70,45])})).status,200);
+ quoteFileDbFailure=true;const finish={method:'POST',headers:{...headers,'X-Upload-Offset':'5'},body:new Uint8Array()};assert.ok((await request('quote-files/finish',finish)).status>=400);const uploads=calls.filter(v=>v.url.includes('upload_session/finish')).length;
+ assert.equal((await request('quote-files/finish',finish)).status,200);assert.equal(calls.filter(v=>v.url.includes('upload_session/finish')).length,uploads);backupId=[...quoteFileRows.keys()][0];assert.ok(backupId);
+});
+await check('quote backup links are scoped and expire or revoke with store access',async()=>{
+ role='reader';userStoreIds=[storeA];const r=await request('quote-files/'+backupId+'/link',{method:'POST'});assert.equal(r.status,200);backupUrl=(await r.json()).url;let response=await handler(new Request(backupUrl));assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),/attachment/);assert.equal(response.headers.get('content-type'),'application/octet-stream');
+ userStoreIds=[];assert.equal((await handler(new Request(backupUrl))).status,404);userStoreIds=[storeA];disabled=true;assert.equal((await handler(new Request(backupUrl))).status,403);disabled=false;role='admin';
+});
+await check('quote backups revalidate board publication and actual Dropbox folder',async()=>{
+ role='reader';quoteBoards.get(qid).published=false;assert.equal((await handler(new Request(backupUrl))).status,404);quoteBoards.get(qid).published=true;
+ const row=quoteFileRows.get(backupId),meta=quoteFileMeta.get(row.dropbox_id),path=meta.path_lower;meta.path_lower='/another-store/cotizaciones/test.pdf';assert.equal((await handler(new Request(backupUrl))).status,404);meta.path_lower=path;role='admin';
+});
+await check('historical quote approvals expose the approved data rather than later edits',async()=>{
+ const a=quoteApprovals[0];const d=await (await request('quote-boards/'+qid+'/approvals/'+a.id)).json();assert.equal(d.approval.snapshot.data.offers[0].lines[0].amount,6000);
+ assert.equal((await request('quote-boards/'+qid+'/approvals/'+crypto.randomUUID())).status,404);
 });
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);

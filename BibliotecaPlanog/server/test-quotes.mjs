@@ -1,0 +1,27 @@
+import {createRequire} from 'node:module';import {readFileSync,existsSync} from 'node:fs';import assert from 'node:assert/strict';
+const ts=createRequire(new URL('../source/package.json',import.meta.url))('typescript');
+const sourceRoot=existsSync(new URL('../src/',import.meta.url))?'../src/':'../source/src/';
+const src=readFileSync(new URL(sourceRoot+'quotes-core.ts',import.meta.url),'utf8');
+const url=s=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+const coreUrl=url(src),core=await import(coreUrl);
+const modelUrl=url(readFileSync(new URL(sourceRoot+'dashboard-model.ts',import.meta.url),'utf8'));
+const importer=await import(url(readFileSync(new URL(sourceRoot+'quote-import.ts',import.meta.url),'utf8').replace("'./quotes-core'",JSON.stringify(coreUrl)).replace("'./dashboard-model'",JSON.stringify(modelUrl))));
+assert.deepEqual(importer.parseDelimited('Descripcion,Cantidad,Total\n"Grafico, PVC",2,60.00'),[['Descripcion','Cantidad','Total'],['Grafico, PVC','2','60.00']]);
+assert.equal(importer.parseNumber('1,5'),1.5);assert.equal(importer.parseNumber('1,000'),1000);assert.equal(importer.parseNumber('$ 1,234.50'),1234.5);assert.equal(importer.parseNumber('1.234,50'),1234.5);assert.equal(importer.parseNumber(''),null);
+assert.equal(importer.guessHeader([['Titulo'],['Grafico','Material','Ancho','Alto','Cantidad','DescInt']]),1);
+assert.equal(importer.guessColumns(['Description','Quantity','Amount']).amount,2);
+assert.equal(importer.guessColumns(['Descripcion','Precio unitario']).amount,-1);
+const r={id:crypto.randomUUID(),title:'Gráfico A',material:'PVC 3mm',width:'30',height:'40',quantity:2,unit:'cm',group:'Gráficos'};
+assert.equal(importer.suggestMatch('Grafico A',[r]),r.id);assert.equal(importer.suggestMatch('Hoja PVC',[r]),null);
+const map={description:0,quantity:1,amount:2,material:-1,width:-1,height:-1,group:-1};
+let data={title:'Prueba',requests:[r],offers:[],notes:''};const lines=importer.offerRows([['Gráfico A','2','60.00']],map,data);assert.equal(lines[0].amount,6000);assert.equal(lines[0].review,'pending');assert.equal(lines[0].request_id,r.id);
+const offer={id:crypto.randomUUID(),supplier:'Prueba',lead_days:5,lead_basis:'Hábiles',terms:'',source:'',reported_subtotal:6000,tax_bp:1600,shipping:0,lines:[{...lines[0],review:'confirmed',material:r.material,width:r.width,height:r.height}]};data.offers=[offer];
+assert.equal(core.qTotals(data,offer).total,6960);assert.equal(core.qTotals(data,offer).errors.length,0);
+assert.ok(core.qTotals(data,{...offer,shipping:null}).errors.includes('Envío por confirmar'));
+assert.equal(core.qTotals({...data,requests:[r,{...r,id:crypto.randomUUID()}]},offer).missing.length,1);
+assert.ok(core.qTotals(data,{...offer,lines:[{...offer.lines[0],quantity:1.5}]}).errors.length>0);
+assert.equal(core.validateQData(data).offers[0].lines[0].amount,6000);
+assert.throws(()=>core.validateQData({...data,offers:[{...offer,lines:[{...offer.lines[0],amount:1.111}]}]}));
+const server=readFileSync(new URL('./retailhub-api.ts',import.meta.url),'utf8');assert.ok(server.includes(src.trim()),'Standalone server validation must match the client calculations.');
+if(process.argv[2]){const packet=JSON.parse(readFileSync(process.argv[2],'utf8'));const parsed=core.validateQData(packet.data),t=core.qTotals(parsed,parsed.offers[0]);assert.equal(t.subtotal,parsed.offers[0].reported_subtotal);console.log('Private import validated:',parsed.requests.length,'requested concepts,',parsed.offers[0].lines.length,'quoted concepts.');}
+console.log('Quote calculations, parsing, header detection, matching and validation passed.');

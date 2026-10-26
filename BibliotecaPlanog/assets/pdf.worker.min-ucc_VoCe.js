@@ -1,0 +1,1 @@
+var e=`/RetailHub/BibliotecaPlanog/assets/pdf.worker.min-FHbmGBN0.mjs`;export{e as default};
