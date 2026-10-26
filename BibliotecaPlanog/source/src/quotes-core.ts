@@ -7,7 +7,7 @@ export function qIssues(request:QRequest,line:QLine){const issues:string[]=[];if
 export function qTotals(data:QData,offer:QOffer){
  const priced=offer.lines.filter(l=>l.amount!==null);const subtotal=priced.reduce((n,l)=>n+l.amount!,0),tax=Math.round(subtotal*offer.tax_bp/10000),total=subtotal+tax+(offer.shipping??0);
  const covered=new Set(priced.filter(l=>l.request_id).map(l=>l.request_id));const missing=data.requests.filter(r=>!covered.has(r.id));
- const errors:string[]=[];if(offer.shipping===null)errors.push('Envío por confirmar');if(offer.lines.some(l=>l.quantity===null))errors.push('Hay cantidades por confirmar');if(!priced.length)errors.push('Sin conceptos con precio');if(offer.lines.some(l=>l.amount===null))errors.push('Hay conceptos sin importe');
+ const errors:string[]=[];if(data.requests.some(r=>covered.has(r.id)&&(r.width||r.height)&&(!r.unit.trim()||/confirmar|pendiente/i.test(r.unit))))errors.push('Unidades de medida por confirmar');if(offer.shipping===null)errors.push('Envío por confirmar');if(offer.lines.some(l=>l.quantity===null))errors.push('Hay cantidades por confirmar');if(!priced.length)errors.push('Sin conceptos con precio');if(offer.lines.some(l=>l.amount===null))errors.push('Hay conceptos sin importe');
  if(offer.lines.some(l=>l.review!=='confirmed'))errors.push('Hay conceptos pendientes de revisión');
  if(offer.lines.some(l=>l.request_id&&qIssues(data.requests.find(r=>r.id===l.request_id)!,l).length&&!l.note.trim()))errors.push('Hay diferencias sin aclaración');
  if(offer.reported_subtotal!==null&&Math.abs(offer.reported_subtotal-subtotal)>1)errors.push('Los importes no coinciden con el subtotal del proveedor');

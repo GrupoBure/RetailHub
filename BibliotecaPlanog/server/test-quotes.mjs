@@ -21,6 +21,7 @@ assert.ok(core.qTotals(data,{...offer,shipping:null}).errors.includes('Envío po
 assert.equal(core.qTotals({...data,requests:[r,{...r,id:crypto.randomUUID()}]},offer).missing.length,1);
 assert.ok(core.qTotals(data,{...offer,lines:[{...offer.lines[0],quantity:1.5}]}).errors.length>0);
 assert.equal(core.validateQData(data).offers[0].lines[0].amount,6000);
+assert.ok(core.qTotals({...data,requests:[{...r,unit:'Por confirmar'}]},offer).errors.includes('Unidades de medida por confirmar'));
 assert.throws(()=>core.validateQData({...data,offers:[{...offer,lines:[{...offer.lines[0],amount:1.111}]}]}));
 const server=readFileSync(new URL('./retailhub-api.ts',import.meta.url),'utf8');assert.ok(server.includes(src.trim()),'Standalone server validation must match the client calculations.');
 if(process.argv[2]){const packet=JSON.parse(readFileSync(process.argv[2],'utf8'));const parsed=core.validateQData(packet.data),t=core.qTotals(parsed,parsed.offers[0]);assert.equal(t.subtotal,parsed.offers[0].reported_subtotal);console.log('Private import validated:',parsed.requests.length,'requested concepts,',parsed.offers[0].lines.length,'quoted concepts.');}
