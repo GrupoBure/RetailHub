@@ -207,3 +207,12 @@ En **Proveedores**, crear un proveedor y pulsar **Usar mi solicitud para captura
 **Eliminar comparativo** requiere confirmación y acceso administrador. Retira el comparativo del portal y bloquea sus enlaces de respaldo; conserva los archivos en Dropbox. Si existe cualquier autorización histórica, se rechaza la eliminación. La RPC de eliminación bloquea la misma fila que la autorización y la aprobación comprueba `deleted_at`, para serializar ambas acciones. La actualización de borradores/publicación filtra registros retirados y usa revisión optimista. Los registros retirados se conservan en la base para recuperación administrativa.
 
 Todas las ventanas del portal, dashboard y cotizaciones dejan de cerrarse al pulsar el fondo. Conservan la X, Esc y sus acciones explícitas.
+
+
+### Continuidad al cambiar de ventana
+
+Volver al navegador revalida la sesión en segundo plano. Una respuesta `/me` con la misma identidad y permisos conserva la referencia del usuario y no recarga tiendas ni reinicia documentos, dashboard o cotizaciones. Los efectos de consulta dependen de identidad/permisos, no de un objeto de usuario recién recibido ni de cambios al nombre mostrado. El listado de tiendas de cotizaciones no se vacía mientras se actualiza.
+
+El revalidador evita peticiones simultáneas y descarta resultados después de desmontar o cambiar de usuario. Los errores temporales (red, 429 o 5xx) mantienen la sesión y las capturas abiertas, con un aviso. Solo 401/403 en la comprobación de sesión retiran el acceso; los cambios reales de rol o permisos siguen aplicándose. La renovación del token tampoco cierra la sesión por un fallo temporal. Las acciones del servidor siguen validando Auth y permisos en cada petición.
+
+Validación: `node server/test-session.mjs`, comprobación TypeScript y build; prueba de navegador del portal con servicios simulados conservando capturas sin aplicar en cotizaciones, dashboard y usuarios al disparar el evento de retorno, error temporal y revocación real de permisos en el simulador. Esta corrección solo cambia el frontend y no requiere SQL ni desplegar otra función.

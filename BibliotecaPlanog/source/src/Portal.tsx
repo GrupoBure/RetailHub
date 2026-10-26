@@ -1,3 +1,5 @@
+import {PortalRequestError,invalidPortalSession,portalAccessKey} from './portal-session';
+import {useSessionRevalidation} from './use-session-revalidation';
 import Quotes from './Quotes';
 import Dashboard from './Dashboard';
 import {useState,useEffect,FormEvent,useRef} from 'react';
@@ -38,7 +40,7 @@ export default function Portal(){
  if(refreshing.current)return refreshing.current;
  refreshing.current=(async()=>{const session=readSession();if(!session?.refresh_token)throw Error('Inicia sesión para continuar.');
  const r=await fetch(apiBase()+'/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:session.refresh_token})});
- const d=await r.json();if(!r.ok){sessionStorage.removeItem('rh_session');setUser(null);throw Error(d.error||'Vuelve a iniciar sesión.');}saveSession(d);return d;})();
+ const d=await r.json();if(!r.ok){const error=new PortalRequestError(d.error||'Vuelve a iniciar sesión.',r.status);if(invalidPortalSession(error)){sessionStorage.removeItem('rh_session');setUser(null);}throw error;}saveSession(d);return d;})();
  try{return await refreshing.current;}finally{refreshing.current=null;}
  };
  const api=async(path:string,init:RequestInit={},retry=true):Promise<any>=>{
@@ -48,8 +50,9 @@ export default function Portal(){
  const session=readSession();if(session?.access_token)h.set('Authorization','Bearer '+session.access_token);
  const r=await fetch(base+'/'+path,{...init,headers:h});
  if(r.status===401&&retry&&path!=='login'&&session?.refresh_token){await renewSession();return api(path,init,false);}
- const d:any=r.status===204?{}:await r.json();if(!r.ok)throw Error(d.error||'No se pudo completar la solicitud.');saveSession(d);return d;
+ const d:any=r.status===204?{}:await r.json();if(!r.ok)throw new PortalRequestError(d.error||'No se pudo completar la solicitud.',r.status);saveSession(d);return d;
  };
+ const accessKey=portalAccessKey(user);
  const [fileLink,setFileLink]=useState<{url:string;download:string}|null>(null),[fileError,setFileError]=useState('');
  useEffect(()=>{let active=true;setFileLink(null);setFileError('');if(selected&&!preview&&!isExcelDoc(selected)){api('documents/'+selected.id+'/link',{method:'POST'}).then(d=>{if(active)setFileLink(d);}).catch(e=>{if(active)setFileError(e.message);});}return()=>{active=false;};},[selected,preview]);
  async function downloadDoc(d:Doc){try{const link=await api('documents/'+d.id+'/link',{method:'POST'});const a=document.createElement('a');a.href=link.download;a.rel='noreferrer';document.body.appendChild(a);a.click();a.remove();}catch(e){setError((e as Error).message);}}
@@ -65,11 +68,11 @@ export default function Portal(){
  }catch(e){setError((e as Error).message);}finally{setBusy(false);}}
  function enterStore(store:Store){docRequest.current++;setActiveStore(store);setDocs([]);setSearch('');setCategory('Planogramas');setError('');}
  useEffect(()=>{(async()=>{try{const r=await api('status',{},false);setConfigured(r.auth);setQuotesReady(r.features?.quotes===true);setQuoteToolsReady(r.features?.quoteTools===true);setQuotePermissionsReady(r.features?.quotePermissions===true);setDashboardReady(r.features?.storeDashboard===true);setTemplatesReady(r.features?.dashboardTemplates===true);setSectionsReady(r.features?.storeSections===true);setDeleteDocumentsReady(r.features?.deleteDocuments===true);setDeleteStoresReady(r.features?.deleteStores===true);setEditStoresReady(r.features?.editStores===true);setUserToolsReady(r.version==='2026-10-24-stores');if(r.auth)try{setUser((await api('me')).user);}catch{}}catch{setError('No se pudo consultar el portal. Actualiza la página.');}finally{setReady(true);}})();},[]);
- useEffect(()=>{if(!user)return;if(preview){setStores([{id:'example-store',name:'Tienda de ejemplo',enabled:true}]);setDocs(samples);setPeople([{id:'preview',name:'Víctor',username:'victor',role:'admin',enabled:true}]);return;}if(tab==='library'||tab==='users'||tab==='dashboard')loadStores();if(tab==='users')api('users').then(d=>setPeople(d.users)).catch(e=>setError(e.message));if(tab==='connections')api('connections').then(setConnections).catch(e=>setError(e.message));},[user,preview,tab,userToolsReady]);
- useEffect(()=>{let active=true;if(!user||preview||tab!=='quotes')return;setQuoteStores([]);api('stores?scope=quotes').then(d=>{if(active)setQuoteStores(d.stores);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[user,preview,tab]);
- useEffect(()=>{if(!user||preview||!userToolsReady||tab!=='library')return;if(activeStore)loadDocs();else{docRequest.current++;setDocs([]);setLoading(false);}},[activeStore?.id,user,preview,userToolsReady,tab]);
+ useEffect(()=>{if(!user)return;if(preview){setStores([{id:'example-store',name:'Tienda de ejemplo',enabled:true}]);setDocs(samples);setPeople([{id:'preview',name:'Víctor',username:'victor',role:'admin',enabled:true}]);return;}if(tab==='library'||tab==='users'||tab==='dashboard')loadStores();if(tab==='users')api('users').then(d=>setPeople(d.users)).catch(e=>setError(e.message));if(tab==='connections')api('connections').then(setConnections).catch(e=>setError(e.message));},[accessKey,preview,tab,userToolsReady]);
+ useEffect(()=>{let active=true;if(!user||preview||tab!=='quotes')return;api('stores?scope=quotes').then(d=>{if(active)setQuoteStores(d.stores);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[accessKey,preview,tab]);
+ useEffect(()=>{if(!user||preview||!userToolsReady||tab!=='library')return;if(activeStore)loadDocs();else{docRequest.current++;setDocs([]);setLoading(false);}},[activeStore?.id,accessKey,preview,userToolsReady,tab]);
  useEffect(()=>{if(!selected&&!modal&&!resetPerson)return;const previous=document.activeElement as HTMLElement|null;const dialog=document.querySelector<HTMLElement>('[role=dialog]');const focusable=()=>Array.from(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),iframe')||[]).filter(e=>e.offsetParent!==null);focusable()[0]?.focus();const fn=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!busy){setSelected(null);setModal(null);setResetPerson(null);}if(e.key==='Tab'){const items=focusable(),first=items[0],last=items[items.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};window.addEventListener('keydown',fn);const old=document.body.style.overflow;document.body.style.overflow='hidden';return()=>{window.removeEventListener('keydown',fn);document.body.style.overflow=old;previous?.focus();};},[selected,modal,resetPerson,busy]);
- useEffect(()=>{if(!user||preview)return;const renew=()=>{api('me').then(d=>setUser(d.user)).catch(()=>setUser(null));};const timer=setInterval(()=>{api('refresh',{method:'POST'},false).catch(()=>setUser(null));},45*60*1000);const visible=()=>{if(document.visibilityState==='visible')renew();};document.addEventListener('visibilitychange',visible);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible);};},[user,preview]);
+ useSessionRevalidation({userId:user?.id,preview,api,setUser,onTemporaryError:setError,onInvalid:()=>sessionStorage.removeItem('rh_session')});
  function nav(t:string){setTab(t);setMobile(false);setError('');}
  async function login(e:FormEvent){e.preventDefault();setBusy(true);setError('');try{setUser((await api('login',{method:'POST',body:JSON.stringify({username:loginName,password})},false)).user);setPassword('');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
  async function logout(){if(!preview)try{await api('logout',{method:'POST'});}catch{toast('No se pudo cerrar la sesión. Vuelve a intentar.');return;}sessionStorage.removeItem('rh_session');docRequest.current++;setUser(null);setPreview(false);setDocs([]);setStores([]);setQuoteStores([]);setActiveStore(null);setTab('library');setError('');}
