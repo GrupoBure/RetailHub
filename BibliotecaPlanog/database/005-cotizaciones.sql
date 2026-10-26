@@ -46,7 +46,7 @@ begin
  if not exists(select 1 from public.rh_stores where id=b.store_id and enabled) then raise exception 'quote_access'; end if;
  select raw_app_meta_data into meta from auth.users where id=p_user;
  if meta is null or coalesce((meta->>'rh_portal')::boolean,false)=false or coalesce((meta->>'disabled')::boolean,false) then raise exception 'quote_access'; end if;
- if coalesce(meta->>'role','reader')<>'admin' and (coalesce((meta->>'quote_approval')::boolean,false)=false or not coalesce(meta->'store_ids','[]'::jsonb) @> jsonb_build_array(b.store_id::text)) then raise exception 'quote_access'; end if;
+ if coalesce(meta->>'role','reader')<>'admin' and (not coalesce(meta->'quote_view_store_ids','[]'::jsonb) @> jsonb_build_array(b.store_id::text) or not coalesce(meta->'quote_approve_store_ids','[]'::jsonb) @> jsonb_build_array(b.store_id::text)) then raise exception 'quote_access'; end if;
  select value into chosen from jsonb_array_elements(b.data->'offers') where value->>'id'=p_offer::text;
  if chosen is null or chosen->>'shipping' is null or chosen->>'lead_days' is null or coalesce(chosen->>'lead_basis','')='' then raise exception 'quote_incomplete'; end if;
  if jsonb_array_length(chosen->'lines')=0 or exists(select 1 from jsonb_array_elements(chosen->'lines') l where l->>'review'<>'confirmed' or l->>'amount' is null or l->>'quantity' is null) then raise exception 'quote_incomplete'; end if;

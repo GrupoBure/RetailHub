@@ -169,3 +169,19 @@ Los enlaces expiran a los 15 minutos. Solo se almacena el hash del ticket; cada 
 ### Verificación
 
 TypeScript y Vite; `server/test-api.mjs` con servicios simulados (permisos, publicación, versiones, importes, faltantes, autorización, historial, respaldo y revocaciones); `server/test-quotes.mjs` para cálculos, formatos numéricos, encabezados, equivalencias y validación; pruebas de pantalla con un API local simulado, XLSX original y PDF de prueba con texto. No equivalen a una autorización o transferencia real en las cuentas del usuario. La persistencia real requiere ejecutar SQL, desplegar función y hacer la primera importación desde una sesión del administrador.
+
+## Permisos independientes de cotizaciones · quote-permissions-1
+
+Esta actualización sustituye el permiso global `quote_approval`. Para proyectos ya activos: desplegar `server/retailhub-api.ts`, ejecutar `database/006-permisos-cotizaciones.sql` y recargar la página. Para instalaciones nuevas, `005-cotizaciones.sql` ya contiene la comprobación actualizada de la RPC.
+
+En Usuarios → Crear/Editar, el administrador dispone de permisos por tienda:
+
+- **Tiendas autorizadas**: documentos y dashboard, según el comportamiento existente (`store_ids`).
+- **Ver cotizaciones**: acceso al listado, detalle, historial y respaldos de cotizaciones de esa tienda (`quote_view_store_ids`).
+- **Autorizar cotizaciones**: aprobación únicamente en esa tienda (`quote_approve_store_ids`), siempre con permiso de visualización también.
+
+Los permisos de cotizaciones son independientes de los documentos. Es posible dar acceso solo a las cotizaciones de una tienda. Marcar Autorizar añade Ver; quitar Ver elimina Autorizar de esa tienda. El servidor valida ambas listas (hasta 100 tiendas activas por lista) y rechaza autorizaciones sin permiso de visualización. Ningún permiso de documentos ni el antiguo booleano global concede acceso a cotizaciones. Los lectores existentes sin las listas nuevas y los nuevos lectores parten sin acceso a cotizaciones. No se modifica ni se elimina el contenido de comparativos, documentos, dashboards o autorizaciones anteriores.
+
+Los administradores conservan gestión de todas las tiendas. Para limitar a una persona, usar el rol de consulta y las casillas por tienda. El menú Cotizaciones se oculta si el lector no tiene tiendas de cotizaciones; `GET /stores?scope=quotes` devuelve únicamente las tiendas permitidas. Las consultas normales de documentos siguen usando sus permisos originales. La interfaz refresca el usuario al recuperar el foco y el servidor revalida los permisos vigentes en cada solicitud. Revocar Ver bloquea también detalle, historial y enlaces de respaldo previamente emitidos. La RPC revalida ambos permisos por tienda dentro de la transacción de autorización.
+
+Verificación adicional: lectores con documentos sin cotizaciones; acceso a cotizaciones sin documentos/dashboard; consulta sin aprobación; aprobación restringida a una tienda; revocación de enlaces; permisos inválidos; intentos de autoasignación y compatibilidad segura con el booleano anterior. Pruebas de servicios simulados; la activación de la RPC real requiere ejecutar el SQL indicado.

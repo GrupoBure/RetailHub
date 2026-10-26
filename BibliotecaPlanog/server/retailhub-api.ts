@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'quotes-1';
+const API_BUILD = 'quote-permissions-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -61,7 +61,7 @@ export async function requireUser(r:Request,admin=false){
  const t=bearer(r);if(!t)throw new PortalError(401,'Inicia sesión para continuar.');
  return membership(await supa('/auth/v1/user',{},t),admin);
 }
-export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),quote_approval:u.app_metadata?.quote_approval===true});
+export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
 export function username(v:unknown){if(typeof v!=='string'||!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(v.toLowerCase()))throw new PortalError(400,'Usa de 3 a 40 letras sin acentos, números, puntos o guiones para el usuario.');return v.toLowerCase();}
 const email=(v:unknown)=>username(v)+'@usuarios.retailhub.invalid';
 export {email};
@@ -100,6 +100,14 @@ export async function content(path:string,args:any,body:BodyInit|null=null,range
 }
 const uuid=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(v);
 function storeIds(u:any):string[]{return Array.isArray(u?.app_metadata?.store_ids)?[...new Set((u.app_metadata.store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
+function quoteStoreIds(u:any,approve=false):string[]{const values=u?.app_metadata?.[approve?'quote_approve_store_ids':'quote_view_store_ids'];return Array.isArray(values)?[...new Set((values.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
+async function validateQuotePermissions(b:any,current:any={}){
+ if(b.quote_approval===true)throw new PortalError(400,'Actualiza el portal y selecciona las tiendas donde podrá ver y autorizar cotizaciones.');
+ const view=await validateStoreIds(b.quote_view_store_ids??quoteStoreIds({app_metadata:current}));
+ const approve=await validateStoreIds(b.quote_approve_store_ids??quoteStoreIds({app_metadata:current},true));
+ if(approve.some(id=>!view.includes(id)))throw new PortalError(400,'Para autorizar una tienda también debes permitir ver sus cotizaciones.');
+ return {quote_view_store_ids:view,quote_approve_store_ids:approve,quote_approval:false};
+}
 function validStoreName(value:unknown){const name=typeof value==='string'?value.trim().normalize('NFC'):'';if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');return name;}
 type Section='Planogramas'|'Listados';
 const fileSection=(name:string):Section|null=>/\.pdf$/i.test(name)?'Planogramas':/\.(xlsx|xls)$/i.test(name)?'Listados':null;
@@ -123,9 +131,9 @@ async function saveStoreFolder(e:any){
  if(!folderIsStore(e))throw new PortalError(400,'La tienda debe ser una carpeta directamente dentro de Retail Hub/Portal.');
  const rows=await supa('/rest/v1/rh_stores?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body:JSON.stringify({dropbox_id:e.id,name:e.name,path_lower:e.path_lower,updated_at:new Date().toISOString()})});return rows[0];
 }
-async function requireStore(id:unknown,user:any){
+async function requireStore(id:unknown,user:any,scope='library'){
  if(!uuid(id))throw new PortalError(404,'Tienda no disponible.');
- if(user.app_metadata.role!=='admin'&&!storeIds(user).includes(id))throw new PortalError(404,'Tienda no disponible.');
+ if(user.app_metadata.role!=='admin'&&!(scope==='quotes'?quoteStoreIds(user):storeIds(user)).includes(id))throw new PortalError(404,'Tienda no disponible.');
  const rows=await supa('/rest/v1/rh_stores?id=eq.'+id+'&select=id,name,dropbox_id,path_lower,enabled');const store=rows[0];
  if(!store||!store.enabled)throw new PortalError(404,'Tienda no disponible.');return store;
 }
@@ -260,7 +268,7 @@ export function validateQData(value:any):QData{
 
 function checkedQuote(value:any){try{return validateQData(value);}catch(e){throw new PortalError(400,(e as Error).message);}}
 
-async function quoteBoardFor(id:unknown,user:any){if(!uuid(id))throw new PortalError(404,'Comparativo no disponible.');const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+id+'&select=id,store_id,published');const board=rows[0];if(!board||!board.published&&user.app_metadata.role!=='admin')throw new PortalError(404,'Comparativo no disponible.');const store=await requireStore(board.store_id,user);return {board,store};}
+async function quoteBoardFor(id:unknown,user:any){if(!uuid(id))throw new PortalError(404,'Comparativo no disponible.');const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+id+'&select=id,store_id,published');const board=rows[0];if(!board||!board.published&&user.app_metadata.role!=='admin')throw new PortalError(404,'Comparativo no disponible.');const store=await requireStore(board.store_id,user,'quotes');return {board,store};}
 async function quoteFileFor(id:string,user:any){if(!uuid(id))throw new PortalError(404,'Respaldo no disponible.');const rows=await supa('/rest/v1/rh_quote_files?id=eq.'+id+'&select=id,board_id,dropbox_id,filename,revision');const file=rows[0];if(!file)throw new PortalError(404,'Respaldo no disponible.');const {store}=await quoteBoardFor(file.board_id,user);const [folder,meta]=await Promise.all([liveFolder(store),dbx('files/get_metadata',{path:file.dropbox_id})]);if(meta['.tag']!=='file'||meta.rev!==file.revision||!String(meta.path_lower||'').startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(404,'El respaldo cambió de ubicación.');return file;}
 
 export async function handle(r:Request){
@@ -268,7 +276,7 @@ export async function handle(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -308,7 +316,7 @@ export async function handle(r:Request){
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
  if(route==='stores'&&method==='GET'){
- const ids=storeIds(user);if(user.app_metadata.role!=='admin'&&!ids.length)return json({stores:[]});
+ const scope=new URL(r.url).searchParams.get('scope');if(scope&&scope!=='quotes')throw new PortalError(400,'Ámbito de tiendas no válido.');const ids=scope==='quotes'?quoteStoreIds(user):storeIds(user);if(user.app_metadata.role!=='admin'&&!ids.length)return json({stores:[]});
  const filter=user.app_metadata.role==='admin'?'':'&id=in.('+ids.join(',')+')';
  return json({stores:(await supa('/rest/v1/rh_stores?select=id,name,enabled&enabled=eq.true&order=name.asc&limit=1000'+filter)).map(safeStore)});}
  if(route==='stores'&&method==='POST'){
@@ -358,15 +366,15 @@ export async function handle(r:Request){
  if(p[0]==='quote-boards'){
  const fields='id,store_id,title,revision,published,data,updated_at';
  if(route==='quote-boards'&&method==='GET'){
- const store=await requireStore(new URL(r.url).searchParams.get('store'),user);
+ const store=await requireStore(new URL(r.url).searchParams.get('store'),user,'quotes');
  return json({boards:await supa('/rest/v1/rh_quote_boards?store_id=eq.'+store.id+'&select=id,title,revision,published,updated_at&order=updated_at.desc&limit=200'+(user.app_metadata.role==='admin'?'':'&published=eq.true'))});
  }
  if(route==='quote-boards'&&method==='POST'){
- membership(user,true);const b=await bodyJSON(r,2097152);const store=await requireStore(b.store_id,user);const data=checkedQuote(b.data);
+ membership(user,true);const b=await bodyJSON(r,2097152);const store=await requireStore(b.store_id,user,'quotes');const data=checkedQuote(b.data);
  const rows=await supa('/rest/v1/rh_quote_boards?select='+fields,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({store_id:store.id,title:data.title,data,published:false,revision:1})});return json({board:rows[0]},201);
  }
  if(!uuid(p[1]))throw new PortalError(404,'Comparativo no disponible.');
- const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+p[1]+'&select='+fields);const board=rows[0];if(!board||(!board.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Comparativo no disponible.');await requireStore(board.store_id,user);
+ const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+p[1]+'&select='+fields);const board=rows[0];if(!board||(!board.published&&user.app_metadata.role!=='admin'))throw new PortalError(404,'Comparativo no disponible.');await requireStore(board.store_id,user,'quotes');
  if(p.length===4&&p[2]==='approvals'&&method==='GET'){
  if(!uuid(p[3]))throw new PortalError(404,'Autorización no disponible.');const rows=await supa('/rest/v1/rh_quote_approvals?board_id=eq.'+board.id+'&id=eq.'+p[3]+'&select=id,board_revision,offer_id,approved_name,approved_at,snapshot');if(!rows[0])throw new PortalError(404,'Autorización no disponible.');return json({approval:rows[0]});
  }
@@ -384,7 +392,7 @@ export async function handle(r:Request){
  const updated=await supa('/rest/v1/rh_quote_boards?id=eq.'+board.id+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({published:true})});if(!updated?.length)throw new PortalError(409,'El comparativo cambió. Actualiza antes de publicar.');return json({board:updated[0]});
  }
  if(p.length===3&&p[2]==='approve'&&method==='POST'){
- if(user.app_metadata.role!=='admin'&&user.app_metadata.quote_approval!==true)throw new PortalError(403,'Tu usuario puede consultar, pero no autorizar cotizaciones.');
+ if(user.app_metadata.role!=='admin'&&!quoteStoreIds(user,true).includes(board.store_id))throw new PortalError(403,'Tu usuario puede consultar, pero no autorizar cotizaciones.');
  const b=await bodyJSON(r);if(!board.published||b.revision!==board.revision)throw new PortalError(409,'La versión del comparativo cambió. Actualiza antes de autorizar.');
  const data=checkedQuote(board.data),offer=data.offers.find(v=>v.id===b.offer_id);if(!offer)throw new PortalError(404,'Proveedor no disponible.');const totals=qTotals(data,offer);
  if(totals.errors.length)throw new PortalError(400,totals.errors.join('. '));if(b.confirm!==true||totals.missing.length&&b.confirm_partial!==true)throw new PortalError(400,'Confirma la autorización y los conceptos que quedan fuera.');
@@ -476,8 +484,8 @@ export async function handle(r:Request){
  let all:any[]=[];for(let page=1;page<=20;page++){const d=await supa('/auth/v1/admin/users?page='+page+'&per_page=100');all.push(...d.users);if(d.users.length<100)break;}
  return json({users:all.filter(u=>u.app_metadata?.rh_portal).map(safeUser)});}
  if(route==='users'&&method==='POST'){
- const b:any=await bodyJSON(r);const assignedStores=await validateStoreIds(b.store_ids??[]);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
- const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,quote_approval:b.quote_approval===true,store_ids:assignedStores}})});
+ const b:any=await bodyJSON(r);const assignedStores=await validateStoreIds(b.store_ids??[]);const quotePermissions=await validateQuotePermissions(b);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
+ const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,...quotePermissions,store_ids:assignedStores}})});
  return json({user:safeUser(u)},201);}
  if(p[0]==='users'&&p.length===2&&(method==='PATCH'||method==='DELETE')){
  if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Usuario no encontrado.');
@@ -493,7 +501,7 @@ export async function handle(r:Request){
  if(b.name!==undefined){if(typeof b.name!=='string'||!b.name.trim()||b.name.trim().length>100)throw new PortalError(400,'Escribe un nombre de hasta 100 caracteres.');changes.user_metadata={...target.user_metadata,name:b.name.trim()};}
  if(b.role!==undefined&&b.role!=='admin'&&b.role!=='reader')throw new PortalError(400,'Permisos no válidos.');
  if(b.store_ids!==undefined)changes.app_metadata={...target.app_metadata,store_ids:await validateStoreIds(b.store_ids)};
- if(b.quote_approval!==undefined){if(typeof b.quote_approval!=='boolean')throw new PortalError(400,'Permiso de autorización no válido.');changes.app_metadata={...(changes.app_metadata||target.app_metadata),quote_approval:b.quote_approval};}
+ if(b.quote_view_store_ids!==undefined||b.quote_approve_store_ids!==undefined||b.quote_approval!==undefined){changes.app_metadata={...(changes.app_metadata||target.app_metadata),...await validateQuotePermissions(b,target.app_metadata)};}
  if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
  if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de entre 12 y 256 caracteres.');changes.password=b.password;}
  if(!Object.keys(changes).length)throw new PortalError(400,'No hay cambios para guardar.');

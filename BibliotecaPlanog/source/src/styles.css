@@ -30,3 +30,5 @@
 @media(max-width:800px){.q-form-grid{grid-template-columns:1fr 1fr}.q-offers{grid-template-columns:1fr}.q-buttons .primary,.q-buttons .secondary{font-size:11px}.quotes .section-title{align-items:start;flex-direction:column}}@media(max-width:500px){.q-form-grid,.q-modal .q-form-grid{grid-template-columns:1fr}.q-modal{padding:25px!important}}
 
 .q-offer{max-width:440px;width:100%}.q-backup{display:block;margin:10px 0}.q-backups{margin:24px 0}
+
+.quote-permission-row{display:grid;grid-template-columns:minmax(0,1fr) 52px 72px;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid #e4ebee;font-size:12px}.quote-permission-row label{display:flex;justify-content:center;margin:0!important}.quote-permission-row input{width:17px!important;height:17px;margin:0!important}.quote-permission-heading{color:#6c818e;font-weight:600;text-align:center}.quote-permission-heading span:first-child{text-align:left}.quote-permission-choices:disabled{opacity:.65}

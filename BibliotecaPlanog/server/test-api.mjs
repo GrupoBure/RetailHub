@@ -20,10 +20,10 @@ const storeRows=[{id:storeA,name:'Tienda A',enabled:true,dropbox_id:'id:store-a'
 let documentDeleted=false,dropboxFileDeleted=false,deleteDropboxFailure=false,deleteDatabaseFailure=false,metadataFolder=false,liveFilename='',fileRevision='a1c10ce0dd78';
 let role='reader',disabled=false,published=true,oauthExchanges=0;
 let dashboards=new Map(),dashboardTemplates=new Map(),quoteBoards=new Map(),quoteApprovals=[];
-let quotePermission=false,quoteFileDbFailure=false;
+let quotePermission=false,quoteViewStores=[],quoteApproveStores=[],quoteFileDbFailure=false;
 const quoteFileRows=new Map(),quoteFileMeta=new Map();
 let settings=new Map(),calls=[],createdFolders=new Map(),folderOverrides=new Map(),failNextMoveTo='';
-const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,quote_approval:quotePermission,store_ids:userStoreIds}});
+const user=()=>({id:uid,email:'victor@usuarios.retailhub.invalid',user_metadata:{store_ids:[storeB],role:'admin'},app_metadata:{rh_portal:true,role,disabled,quote_approval:quotePermission,quote_view_store_ids:quoteViewStores,quote_approve_store_ids:quoteApproveStores,store_ids:userStoreIds}});
 const reply=(data,status=200)=>new Response(data===null?null:JSON.stringify(data),{status});
 globalThis.fetch=async(url,init={})=>{
  url=String(url);calls.push({url,init});const u=new URL(url);
@@ -31,7 +31,7 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/auth/v1/token')return reply({user:user(),access_token:'valid',refresh_token:'rotated',expires_in:3600});
  if(u.pathname==='/auth/v1/admin/users'&&init.method==='POST')return reply({id:otherId,...JSON.parse(init.body)});
  if(u.pathname.startsWith('/auth/v1/admin/users/')){
- const targetId=u.pathname.split('/').at(-1);if(targetId===uid){if(init.method==='PUT'){const change=JSON.parse(init.body);if(change.app_metadata?.quote_approval!==undefined)quotePermission=change.app_metadata.quote_approval;return reply({...user(),...change});}return reply(user());}
+ const targetId=u.pathname.split('/').at(-1);if(targetId===uid){if(init.method==='PUT'){const change=JSON.parse(init.body);if(change.app_metadata?.quote_approval!==undefined)quotePermission=change.app_metadata.quote_approval;if(change.app_metadata?.quote_view_store_ids)quoteViewStores=change.app_metadata.quote_view_store_ids;if(change.app_metadata?.quote_approve_store_ids)quoteApproveStores=change.app_metadata.quote_approve_store_ids;return reply({...user(),...change});}return reply(user());}
  if(targetDeleted||targetId!==otherId)return reply({},404);
  if(init.method==='DELETE'){targetDeleted=true;return reply(target);}
  if(init.method==='PUT'){const change=JSON.parse(init.body);if(change.email==='duplicado@usuarios.retailhub.invalid')return reply({code:'email_exists'},422);target={...target,...change};return reply(target);}
@@ -446,7 +446,7 @@ await check('invalid money, duplicate mappings and fabricated concept IDs are re
  for(const change of [d=>{d.offers[0].lines[0].amount=1.111;},d=>{d.offers[0].lines[0].amount=-100;},d=>{d.offers[0].lines.push({...d.offers[0].lines[0],id:crypto.randomUUID()});},d=>{d.offers[0].lines[0].request_id=crypto.randomUUID();}]){const d=structuredClone(qdata);change(d);assert.equal((await request('quote-boards/'+qid,{method:'PATCH',body:{revision:1,data:d}})).status,400);}
 });
 await check('drafts are invisible to readers including direct URLs',async()=>{
- role='reader';assert.equal((await request('quote-boards/'+qid)).status,404);assert.equal((await (await request('quote-boards?store='+storeA)).json()).boards.length,0);role='admin';
+ role='reader';quoteViewStores=[storeA];assert.equal((await request('quote-boards/'+qid)).status,404);assert.equal((await (await request('quote-boards?store='+storeA)).json()).boards.length,0);role='admin';
 });
 await check('publication requires admin and the exact compared revision',async()=>{
  assert.equal((await request('quote-boards/'+qid+'/publish',{method:'POST',body:{revision:0}})).status,409);assert.equal((await request('quote-boards/'+qid+'/publish',{method:'POST',body:{revision:1}})).status,200);
@@ -454,7 +454,7 @@ await check('publication requires admin and the exact compared revision',async()
 });
 await check('approval requires a fresh explicit permission, store grant and confirmation',async()=>{
  const path='quote-boards/'+qid+'/approve',body={revision:1,offer_id:qOfferId,confirm:true};
- assert.equal((await request(path,{method:'POST',body})).status,403);quotePermission=true;userStoreIds=[];assert.equal((await request(path,{method:'POST',body})).status,404);userStoreIds=[storeA];
+ assert.equal((await request(path,{method:'POST',body})).status,403);quotePermission=true;assert.equal((await request(path,{method:'POST',body})).status,403);quoteApproveStores=[storeA];quoteViewStores=[];assert.equal((await request(path,{method:'POST',body})).status,404);quoteViewStores=[storeA];
  assert.equal((await request(path,{method:'POST',body:{...body,confirm:false}})).status,400);assert.equal((await request(path,{method:'POST',body:{...body,revision:0}})).status,409);
  assert.equal((await request(path,{method:'POST',body})).status,200);assert.equal(quoteApprovals.length,1);assert.equal(quoteApprovals[0].approved_name,'victor');
  assert.equal((await request(path,{method:'POST',body})).status,409);role='admin';
@@ -474,10 +474,10 @@ await check('partial coverage is never counted as zero and requires explicit acc
  const body={revision:2,offer_id:qOfferId,confirm:true};assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body})).status,400);assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{...body,confirm_partial:true}})).status,200);
 });
 await check('retiring stores and revoking approver permission take effect immediately',async()=>{
- role='reader';quotePermission=false;assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{}})).status,403);storeRows.find(v=>v.id===storeA).enabled=false;assert.equal((await request('quote-boards/'+qid)).status,404);storeRows.find(v=>v.id===storeA).enabled=true;role='admin';
+ role='reader';quotePermission=false;quoteApproveStores=[];assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{}})).status,403);storeRows.find(v=>v.id===storeA).enabled=false;assert.equal((await request('quote-boards/'+qid)).status,404);storeRows.find(v=>v.id===storeA).enabled=true;role='admin';
 });
 await check('admin can assign approval without changing other trusted metadata',async()=>{
- const r=await request('users/'+uid,{method:'PATCH',body:{quote_approval:true}});assert.equal(r.status,200);const last=calls.filter(v=>v.url.endsWith('/auth/v1/admin/users/'+uid)&&v.init.method==='PUT').at(-1);assert.equal(JSON.parse(last.init.body).app_metadata.quote_approval,true);
+ const r=await request('users/'+uid,{method:'PATCH',body:{quote_view_store_ids:[storeA],quote_approve_store_ids:[storeA]}});assert.equal(r.status,200);const last=calls.filter(v=>v.url.endsWith('/auth/v1/admin/users/'+uid)&&v.init.method==='PUT').at(-1);assert.deepEqual(JSON.parse(last.init.body).app_metadata.quote_approve_store_ids,[storeA]);assert.equal(JSON.parse(last.init.body).app_metadata.quote_approval,false);
  assert.equal((await (await request('status',{token:null})).json()).features.quotes,true);
 });
 let backupTicket,backupId,backupUrl;
@@ -493,7 +493,7 @@ await check('quote backups stream in chunks and recover catalog writes without u
 });
 await check('quote backup links are scoped and expire or revoke with store access',async()=>{
  role='reader';userStoreIds=[storeA];const r=await request('quote-files/'+backupId+'/link',{method:'POST'});assert.equal(r.status,200);backupUrl=(await r.json()).url;let response=await handler(new Request(backupUrl));assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),/attachment/);assert.equal(response.headers.get('content-type'),'application/octet-stream');
- userStoreIds=[];assert.equal((await handler(new Request(backupUrl))).status,404);userStoreIds=[storeA];disabled=true;assert.equal((await handler(new Request(backupUrl))).status,403);disabled=false;role='admin';
+ quoteViewStores=[];assert.equal((await handler(new Request(backupUrl))).status,404);quoteViewStores=[storeA];disabled=true;assert.equal((await handler(new Request(backupUrl))).status,403);disabled=false;role='admin';
 });
 await check('quote backups revalidate board publication and actual Dropbox folder',async()=>{
  role='reader';quoteBoards.get(qid).published=false;assert.equal((await handler(new Request(backupUrl))).status,404);quoteBoards.get(qid).published=true;
@@ -502,6 +502,43 @@ await check('quote backups revalidate board publication and actual Dropbox folde
 await check('historical quote approvals expose the approved data rather than later edits',async()=>{
  const a=quoteApprovals[0];const d=await (await request('quote-boards/'+qid+'/approvals/'+a.id)).json();assert.equal(d.approval.snapshot.data.offers[0].lines[0].amount,6000);
  assert.equal((await request('quote-boards/'+qid+'/approvals/'+crypto.randomUUID())).status,404);
+});
+// Independent quote visibility and approval, per store, default deny.
+await check('document access and the retired global approval flag do not grant quote visibility',async()=>{
+ role='reader';userStoreIds=[storeA,storeB];quoteViewStores=[];quoteApproveStores=[];quotePermission=true;
+ assert.equal((await request('quote-boards?store='+storeA)).status,404);assert.equal((await request('quote-boards/'+qid)).status,404);
+ assert.deepEqual((await (await request('stores?scope=quotes')).json()).stores,[]);
+ assert.equal((await request('documents?store='+storeA)).status,200);
+});
+await check('quote visibility can be granted without document or dashboard access',async()=>{
+ userStoreIds=[];quoteViewStores=[storeA];quoteApproveStores=[];
+ const d=await (await request('stores?scope=quotes')).json();assert.deepEqual(d.stores.map(s=>s.id),[storeA]);
+ assert.equal((await request('quote-boards/'+qid)).status,200);assert.equal((await request('documents?store='+storeA)).status,404);assert.equal((await request('stores/'+storeA+'/dashboard')).status,404);
+ assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{}})).status,403);
+});
+await check('view and approve grants are independent across stores and cannot be forged in editable metadata',async()=>{
+ quoteViewStores=[storeA,storeB];quoteApproveStores=[storeB];
+ assert.equal((await request('quote-boards/'+qid+'/approve',{method:'POST',body:{}})).status,403);
+ quoteViewStores=[storeB];assert.equal((await request('quote-boards/'+qid)).status,404);
+ assert.equal((await request('quote-files/'+backupId+'/link',{method:'POST'})).status,404);
+});
+await check('only admins can assign valid store grants; approval must be a subset of visibility',async()=>{
+ role='reader';assert.equal((await request('users/'+uid,{method:'PATCH',body:{quote_view_store_ids:[storeA],quote_approve_store_ids:[storeA]}})).status,403);role='admin';
+ assert.equal((await request('users/'+uid,{method:'PATCH',body:{quote_view_store_ids:[],quote_approve_store_ids:[storeA]}})).status,400);
+ assert.equal((await request('users/'+uid,{method:'PATCH',body:{quote_view_store_ids:['invalid'],quote_approve_store_ids:[]}})).status,400);
+ assert.equal((await request('users/'+uid,{method:'PATCH',body:{quote_approval:true}})).status,400);
+ const r=await request('users/'+uid,{method:'PATCH',body:{quote_view_store_ids:[storeA],quote_approve_store_ids:[]}});assert.equal(r.status,200);const d=await r.json();assert.deepEqual(d.user.quote_view_store_ids,[storeA]);assert.deepEqual(d.user.quote_approve_store_ids,[]);
+});
+await check('new readers receive no quote grants unless explicitly selected and revocation blocks old file tickets',async()=>{
+ const r=await request('users',{method:'POST',body:{username:'nuevoquotes',name:'Nuevo',password:'password-123456',store_ids:[storeA]}});assert.equal(r.status,201);const d=await r.json();assert.deepEqual(d.user.quote_view_store_ids,[]);assert.deepEqual(d.user.quote_approve_store_ids,[]);
+ role='reader';quoteViewStores=[];quoteApproveStores=[];assert.equal((await handler(new Request(backupUrl))).status,404);role='admin';userStoreIds=[storeA];
+ assert.equal((await (await request('status',{token:null})).json()).features.quotePermissions,true);
+});
+await check('an explicitly assigned quote approver can approve without access to store documents',async()=>{
+ role='admin';const created=await request('quote-boards',{method:'POST',body:{store_id:storeA,data:qdata}});const fresh=(await created.json()).board;assert.equal((await request('quote-boards/'+fresh.id+'/publish',{method:'POST',body:{revision:1}})).status,200);
+ role='reader';userStoreIds=[];quoteViewStores=[storeA];quoteApproveStores=[storeA];
+ assert.equal((await request('quote-boards/'+fresh.id+'/approve',{method:'POST',body:{revision:1,offer_id:qOfferId,confirm:true}})).status,200);
+ assert.equal((await request('documents?store='+storeA)).status,404);role='admin';userStoreIds=[storeA];
 });
 await check('new injected Supabase API keys are supported',async()=>{delete environment.SUPABASE_ANON_KEY;delete environment.SUPABASE_SERVICE_ROLE_KEY;environment.SUPABASE_PUBLISHABLE_KEYS=JSON.stringify({default:'sb_publishable_example'});environment.SUPABASE_SECRET_KEYS=JSON.stringify({default:'sb_secret_example'});await request('documents?store='+storeA);const h=new Headers(calls.at(-1).init.headers);assert.equal(h.get('apikey'),'sb_secret_example');assert.equal(h.get('authorization'),null);});
 console.log(`${checks} security and integration checks passed (mocked services).`);
