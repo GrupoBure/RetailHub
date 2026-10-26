@@ -185,3 +185,12 @@ Los permisos de cotizaciones son independientes de los documentos. Es posible da
 Los administradores conservan gestión de todas las tiendas. Para limitar a una persona, usar el rol de consulta y las casillas por tienda. El menú Cotizaciones se oculta si el lector no tiene tiendas de cotizaciones; `GET /stores?scope=quotes` devuelve únicamente las tiendas permitidas. Las consultas normales de documentos siguen usando sus permisos originales. La interfaz refresca el usuario al recuperar el foco y el servidor revalida los permisos vigentes en cada solicitud. Revocar Ver bloquea también detalle, historial y enlaces de respaldo previamente emitidos. La RPC revalida ambos permisos por tienda dentro de la transacción de autorización.
 
 Verificación adicional: lectores con documentos sin cotizaciones; acceso a cotizaciones sin documentos/dashboard; consulta sin aprobación; aprobación restringida a una tienda; revocación de enlaces; permisos inválidos; intentos de autoasignación y compatibilidad segura con el booleano anterior. Pruebas de servicios simulados; la activación de la RPC real requiere ejecutar el SQL indicado.
+
+
+### Cotizaciones: preparación guiada
+
+El administrador prepara cada comparativo en cuatro pasos: **Tu solicitud → Proveedores → Revisar coincidencias → Comparar y compartir**. La solicitud admite Excel y las propuestas Excel/PDF con texto. La revisión muestra solicitud y renglón del proveedor lado a lado; conserva la confirmación manual de alcance y las aclaraciones de diferencias. No incluye OCR. La recuperación JSON está en una opción secundaria, no es parte del flujo habitual.
+
+Los borradores se guardan automáticamente después de 1.8 segundos sin cambios; los conceptos editados en una ventana se guardan al pulsar **Aplicar cambio**. No se crean comparativos vacíos sin conceptos ni proveedores. El guardado usa revisión optimista, conserva ediciones realizadas durante una petición y se pausa ante errores para permitir su revisión. También existe **Guardar borrador** manual y aviso del navegador al salir con cambios sin guardar.
+
+Publicar sigue siendo una acción explícita. Al editar una versión ya publicada, el administrador debe pulsar **Guardar borrador** para crear otra versión, que deberá publicar de nuevo. El cliente ve comparación, detalle desplegable y respaldos; los permisos separados por tienda para consulta y autorización se mantienen. Esta actualización solo cambia el frontend, no requiere otra migración ni redeploy de la función.
