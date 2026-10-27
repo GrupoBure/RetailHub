@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'quote-machotes-1';
+const API_BUILD = 'quote-records-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -235,16 +235,16 @@ async function ticketUser(r:Request,id:string){
  return membership(await supa('/auth/v1/admin/users/'+data.uid));
 }
 
-export type QRequest={id:string;title:string;material:string;width:string;height:string;quantity:number;unit:string;group:string};
-export type QLine={id:string;request_id:string|null;description:string;material:string;width:string;height:string;quantity:number|null;amount:number|null;review:'pending'|'confirmed'|'clarify';note:string};
+export type QRequest={id:string;title:string;material:string;width:string;height:string;quantity:number|null;unit:string;group:string;details?:string;attributes?:string};
+export type QLine={id:string;request_id:string|null;description:string;material:string;width:string;height:string;quantity:number|null;amount:number|null;review:'pending'|'confirmed'|'clarify';note:string;attributes?:string};
 export type QOffer={id:string;supplier:string;lead_days:number|null;lead_basis:string;terms:string;source:string;reported_subtotal:number|null;tax_bp:number;shipping:number|null;lines:QLine[]};
-export type QData={title:string;requests:QRequest[];offers:QOffer[];notes:string};
+export type QData={title:string;requests:QRequest[];offers:QOffer[];notes:string;currency?:string};
 export const qNormalize=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
-export function qIssues(request:QRequest,line:QLine){const issues:string[]=[];if(line.quantity!==request.quantity)issues.push('Cantidad distinta o sin confirmar');if(line.material&&qNormalize(line.material)!==qNormalize(request.material))issues.push('Material distinto');if(line.width&&line.width!==request.width||line.height&&line.height!==request.height)issues.push('Medidas distintas');return issues;}
+export function qIssues(request:QRequest,line:QLine){const issues:string[]=[];if(request.attributes!==undefined&&line.attributes!==undefined&&qNormalize(request.attributes)!==qNormalize(line.attributes))issues.push('Características distintas');if(line.quantity!==request.quantity)issues.push('Cantidad distinta o sin confirmar');if(line.material&&qNormalize(line.material)!==qNormalize(request.material))issues.push('Material distinto');if(line.width&&line.width!==request.width||line.height&&line.height!==request.height)issues.push('Medidas distintas');return issues;}
 export function qTotals(data:QData,offer:QOffer){
  const priced=offer.lines.filter(l=>l.amount!==null);const subtotal=priced.reduce((n,l)=>n+l.amount!,0),tax=Math.round(subtotal*offer.tax_bp/10000),total=subtotal+tax+(offer.shipping??0);
  const covered=new Set(priced.filter(l=>l.request_id).map(l=>l.request_id));const missing=data.requests.filter(r=>!covered.has(r.id));
- const errors:string[]=[];if(data.requests.some(r=>covered.has(r.id)&&(r.width||r.height)&&(!r.unit.trim()||/confirmar|pendiente/i.test(r.unit))))errors.push('Unidades de medida por confirmar');if(offer.shipping===null)errors.push('Envío por confirmar');if(offer.lines.some(l=>l.quantity===null))errors.push('Hay cantidades por confirmar');if(!priced.length)errors.push('Sin conceptos con precio');if(offer.lines.some(l=>l.amount===null))errors.push('Hay conceptos sin importe');
+ const errors:string[]=[];if(data.requests.some(r=>covered.has(r.id)&&r.quantity===null))errors.push('Hay cantidades de referencia por confirmar');if(data.requests.some(r=>covered.has(r.id)&&(r.width||r.height)&&(!r.unit.trim()||/confirmar|pendiente/i.test(r.unit))))errors.push('Unidades de medida por confirmar');if(offer.shipping===null)errors.push('Envío por confirmar');if(offer.lines.some(l=>l.quantity===null))errors.push('Hay cantidades por confirmar');if(!priced.length)errors.push('Sin conceptos con precio');if(offer.lines.some(l=>l.amount===null))errors.push('Hay conceptos sin importe');
  if(offer.lines.some(l=>l.review!=='confirmed'))errors.push('Hay conceptos pendientes de revisión');
  if(offer.lines.some(l=>l.request_id&&qIssues(data.requests.find(r=>r.id===l.request_id)!,l).length&&!l.note.trim()))errors.push('Hay diferencias sin aclaración');
  if(offer.reported_subtotal!==null&&Math.abs(offer.reported_subtotal-subtotal)>1)errors.push('Los importes no coinciden con el subtotal del proveedor');
@@ -259,25 +259,52 @@ export function validateQData(value:any):QData{
  const cents=(v:any)=>Number.isSafeInteger(v)?num(v,0,100000000000):fail('Usa importes válidos con hasta dos decimales.');
  if(!value||!Array.isArray(value.requests)||value.requests.length>300||!Array.isArray(value.offers)||value.offers.length>10)fail('Máximo 300 conceptos y 10 proveedores por comparativo.');
  const ids=new Set<string>(),unique=(v:any)=>{const key=id(v);if(ids.has(key))fail('Hay identificadores duplicados.');ids.add(key);return key;};
- const requests:QRequest[]=value.requests.map((r:any)=>({id:unique(r.id),title:text(r.title,300,true),material:text(r.material,200),width:text(r.width,30),height:text(r.height,30),quantity:num(r.quantity,0.0001,1000000),unit:text(r.unit,60),group:text(r.group,100)}));
+ const requests:QRequest[]=value.requests.map((r:any)=>({id:unique(r.id),title:text(r.title,300,true),material:text(r.material,200),width:text(r.width,30),height:text(r.height,30),quantity:r.quantity===null?null:num(r.quantity,0.0001,1000000),unit:text(r.unit,60),group:text(r.group,100),...(r.details!==undefined?{details:text(r.details,20000)}:{}),...(r.attributes!==undefined?{attributes:text(r.attributes,20000)}:{})}));
  const requestIds=new Set(requests.map(r=>r.id));
  const offers:QOffer[]=value.offers.map((o:any)=>{if(!Array.isArray(o.lines)||o.lines.length>400)fail('Máximo 400 renglones por proveedor.');const mapped=new Set<string>();
- const lines:QLine[]=o.lines.map((l:any)=>{const ref=l.request_id===null?null:id(l.request_id);if(ref&&(!requestIds.has(ref)||mapped.has(ref)))fail('Cada renglón debe corresponder a un concepto distinto de la solicitud.');if(ref)mapped.add(ref);if(!['pending','confirmed','clarify'].includes(l.review))fail('Estado de revisión no válido.');return {id:unique(l.id),request_id:ref,description:text(l.description,500,true),material:text(l.material,200),width:text(l.width,30),height:text(l.height,30),quantity:l.quantity===null?null:num(l.quantity,0.0001,1000000),amount:l.amount===null?null:cents(l.amount),review:l.review,note:text(l.note,1500)};});
+ const lines:QLine[]=o.lines.map((l:any)=>{const ref=l.request_id===null?null:id(l.request_id);if(ref&&(!requestIds.has(ref)||mapped.has(ref)))fail('Cada renglón debe corresponder a un concepto distinto de la solicitud.');if(ref)mapped.add(ref);if(!['pending','confirmed','clarify'].includes(l.review))fail('Estado de revisión no válido.');return {id:unique(l.id),request_id:ref,description:text(l.description,500,true),material:text(l.material,200),width:text(l.width,30),height:text(l.height,30),quantity:l.quantity===null?null:num(l.quantity,0.0001,1000000),amount:l.amount===null?null:cents(l.amount),review:l.review,note:text(l.note,22000),...(l.attributes!==undefined?{attributes:text(l.attributes,20000)}:{})};});
  return {id:unique(o.id),supplier:text(o.supplier,150,true),lead_days:o.lead_days===null?null:num(o.lead_days,0,1000),lead_basis:text(o.lead_basis,200),terms:text(o.terms,2000),source:text(o.source,200),reported_subtotal:o.reported_subtotal===null?null:cents(o.reported_subtotal),tax_bp:num(o.tax_bp,0,10000),shipping:o.shipping===null?null:cents(o.shipping),lines};});
- return {title:text(value.title,200,true),notes:text(value.notes,3000),requests,offers};
+ return {title:text(value.title,200,true),notes:text(value.notes,3000),requests,offers,currency:value.currency===undefined?'MXN':['MXN','USD','EUR'].includes(value.currency)?value.currency:fail('Moneda no válida.')};
 }
 
 function checkedQuote(value:any){try{return validateQData(value);}catch(e){throw new PortalError(400,(e as Error).message);}}
 
 async function quoteBoardFor(id:unknown,user:any){if(!uuid(id))throw new PortalError(404,'Comparativo no disponible.');const rows=await supa('/rest/v1/rh_quote_boards?id=eq.'+id+'&deleted_at=is.null&select=id,store_id,published');const board=rows[0];if(!board||!board.published&&user.app_metadata.role!=='admin')throw new PortalError(404,'Comparativo no disponible.');const store=await requireStore(board.store_id,user,'quotes');return {board,store};}
-async function quoteFileFor(id:string,user:any){if(!uuid(id))throw new PortalError(404,'Respaldo no disponible.');const rows=await supa('/rest/v1/rh_quote_files?id=eq.'+id+'&select=id,board_id,dropbox_id,filename,revision');const file=rows[0];if(!file)throw new PortalError(404,'Respaldo no disponible.');const {store}=await quoteBoardFor(file.board_id,user);const [folder,meta]=await Promise.all([liveFolder(store),dbx('files/get_metadata',{path:file.dropbox_id})]);if(meta['.tag']!=='file'||meta.rev!==file.revision||!String(meta.path_lower||'').startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(404,'El respaldo cambió de ubicación.');return file;}
+async function quoteFileFor(id:string,user:any){if(!uuid(id))throw new PortalError(404,'Respaldo no disponible.');const rows=await supa('/rest/v1/rh_quote_files?id=eq.'+id+'&select=id,board_id,document_id,dropbox_id,filename,revision');const file=rows[0];if(!file)throw new PortalError(404,'Respaldo no disponible.');const {store}=file.document_id?{store:await requireStore((await quoteRecordFor(file.document_id,user)).store_id,user,'quotes')}:await quoteBoardFor(file.board_id,user);const [folder,meta]=await Promise.all([liveFolder(store),dbx('files/get_metadata',{path:file.dropbox_id})]);if(meta['.tag']!=='file'||meta.rev!==file.revision||!String(meta.path_lower||'').startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(404,'El respaldo cambió de ubicación.');return file;}
+
+// Shared standalone quotation model. Keep the server copy identical.
+export type RecordRole='description'|'quantity'|'unit_price'|'amount'|'attribute'|'ignore';
+export type RecordColumn={id:string;label:string;role:RecordRole};
+export type RecordRow={id:string;cells:string[]};
+export type QuoteRecordData={title:string;type:'quote'|'request';supplier_id:string|null;supplier:string;currency:string;lead_days:number|null;lead_basis:string;terms:string;tax_bp:number;shipping:number|null;source:string;notes:string;columns:RecordColumn[];rows:RecordRow[]};
+export type QuoteRecord={id:string;store_id:string;kind:'quote'|'request'|'template'|'comparison-template';title:string;revision:number;data:QuoteRecordData;updated_at:string};
+export type SavedSupplier={id:string;name:string;revision:number;defaults:{lead_days:number|null;lead_basis:string;terms:string;tax_bp:number;shipping:number|null;currency:string}};
+export const recordKey=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+export function recordNumber(text:string):number|null{let v=text.trim().replace(/[$\s]/g,'');if(!v)return null;if(v.includes(',')&&v.includes('.'))v=v.lastIndexOf(',')>v.lastIndexOf('.')?v.replace(/\./g,'').replace(',','.'):v.replace(/,/g,'');else if(v.includes(','))v=/^\d{1,3}(,\d{3})+$/.test(v)?v.replace(/,/g,''):v.replace(',','.');if(!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(v))return null;const n=Number(v);return Number.isFinite(n)?n:null;}
+export function recordCell(d:QuoteRecordData,r:RecordRow,role:RecordRole){const i=d.columns.findIndex(c=>c.role===role);return i<0?'':r.cells[i]||'';}
+export function recordAmount(d:QuoteRecordData,r:RecordRow){const total=recordNumber(recordCell(d,r,'amount'));if(d.columns.some(c=>c.role==='amount'))return total===null?null:Math.round(total*100);const price=recordNumber(recordCell(d,r,'unit_price')),qty=recordNumber(recordCell(d,r,'quantity'));return price===null||qty===null?null:Math.round(price*qty*100);}
+export function recordTotals(d:QuoteRecordData){const amounts=d.rows.map(r=>recordAmount(d,r)),subtotal=amounts.reduce<number>((a,v)=>a+(v??0),0);return {subtotal,total:subtotal+Math.round(subtotal*d.tax_bp/10000)+(d.shipping??0),missing:amounts.filter(a=>a===null).length,priced:amounts.filter(a=>a!==null).length};}
+export function validateQuoteRecord(v:any,allowMissingSupplier=false):QuoteRecordData{
+ const fail=(m:string):never=>{throw Error(m);};const text=(s:any,max:number,required=false)=>typeof s==='string'&&s.length<=max&&(!required||!!s.trim())?s.trim():fail('Revisa los textos de la cotización.');
+ const num=(n:any,max:number,nullable=false)=>nullable&&n===null?null:typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=max?n:fail('Revisa los importes y plazos.');
+ if(!v||!['quote','request'].includes(v.type)||!Array.isArray(v.columns)||!v.columns.length||v.columns.length>30||!Array.isArray(v.rows)||v.rows.length>300)fail('Usa hasta 30 columnas y 300 renglones.');
+ const columns:RecordColumn[]=v.columns.map((c:any)=>({id:text(c.id,80,true),label:text(c.label,100,true),role:['description','quantity','unit_price','amount','attribute','ignore'].includes(c.role)?c.role:fail('Tipo de columna no válido.')}));
+ for(const role of ['quantity','unit_price','amount'])if(columns.filter(c=>c.role===role).length>1)fail('Asigna una sola columna a '+role+'.');
+ if(columns.filter(c=>c.role==='description').length!==1)fail('Elige una columna de descripción.');if(new Set(columns.map(c=>c.id)).size!==columns.length)fail('Hay columnas duplicadas.');
+ const ids=new Set<string>();const rows:RecordRow[]=v.rows.map((r:any)=>{const id=text(r.id,80,true);if(ids.has(id))fail('Hay renglones duplicados.');ids.add(id);if(!Array.isArray(r.cells)||r.cells.length!==columns.length)fail('Revisa las columnas de cada renglón.');const row={id,cells:r.cells.map((c:any)=>text(c,500))};if(!row.cells[columns.findIndex(c=>c.role==='description')])fail('Cada renglón necesita una descripción.');for(const role of ['quantity','unit_price','amount'] as RecordRole[]){const raw=recordCell({columns} as QuoteRecordData,row,role),n=recordNumber(raw);if(raw&&(n===null||n<0||(role==='quantity'&&(n===0||n>1000000))||n>1000000000))fail('Revisa la cantidad o el precio del renglón '+(ids.size)+'.');}return row;});
+ const data:QuoteRecordData={title:text(v.title,200,true),type:v.type,supplier_id:v.supplier_id===null?null:/^[a-f0-9-]{36}$/i.test(v.supplier_id)?v.supplier_id:fail('Proveedor no válido.'),supplier:text(v.supplier,150,v.type==='quote'&&!allowMissingSupplier),currency:['MXN','USD','EUR'].includes(v.currency)?v.currency:fail('Moneda no válida.'),lead_days:num(v.lead_days,1000,true),lead_basis:text(v.lead_basis,200),terms:text(v.terms,2000),tax_bp:num(v.tax_bp,10000)!,shipping:num(v.shipping,100000000000,true),source:text(v.source,200),notes:text(v.notes,3000),columns,rows};
+ if(!Number.isInteger(data.tax_bp)||(data.shipping!==null&&!Number.isSafeInteger(data.shipping)))fail('Revisa los decimales de impuestos y envío.');
+ if(rows.some(r=>recordAmount(data,r)!==null&&!Number.isSafeInteger(recordAmount(data,r))))fail('Importe fuera de rango.');return data;
+}
+
+async function quoteRecordFor(id:unknown,user:any){membership(user,true);if(!uuid(id))throw new PortalError(404,'Cotización no disponible.');const rows=await supa('/rest/v1/rh_quote_records?id=eq.'+id+'&deleted_at=is.null&select=id,store_id,kind,title,revision,data,updated_at');if(!rows[0])throw new PortalError(404,'Cotización no disponible.');await requireStore(rows[0].store_id,user,'quotes');return rows[0];}
 
 export async function handle(r:Request){
  try{
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -350,20 +377,49 @@ export async function handle(r:Request){
  if(p.length===3&&p[2]==='link'&&method==='POST'){await quoteFileFor(p[1],user);const token=crypto.randomUUID()+crypto.randomUUID();await transient('file:'+await digest(token),{qfile:p[1],uid:user.id,expires:Date.now()+900000});return json({url:endpoint(r)+'/quote-files/'+p[1]+'/file?ticket='+token});}
  membership(user,true);
  if(route==='quote-files/start'&&method==='POST'){
- const b=await bodyJSON(r);const {board,store}=await quoteBoardFor(b.board_id,user);const name=typeof b.filename==='string'?b.filename.normalize('NFC'):'';
- if(!name||name.length>150||/[\/\\\u0000-\u001f]/.test(name)||!/^.+\.(pdf|xlsx|png|jpe?g)$/i.test(name)||!Number.isSafeInteger(b.size)||b.size<1||b.size>20000000)throw new PortalError(400,'Adjunta PDF, XLSX, PNG o JPG de hasta 20 MB.');
+ const b=await bodyJSON(r);const {board,store}=b.document_id?{board:{id:null},store:await requireStore((await quoteRecordFor(b.document_id,user)).store_id,user,'quotes')}:await quoteBoardFor(b.board_id,user);const name=typeof b.filename==='string'?b.filename.normalize('NFC'):'';
+ if(!name||name.length>150||/[\/\\\u0000-\u001f]/.test(name)||!/^.+\.(pdf|xlsx|csv|tsv|txt|png|jpe?g)$/i.test(name)||!Number.isSafeInteger(b.size)||b.size<1||b.size>20000000)throw new PortalError(400,'Adjunta PDF, XLSX, CSV, TSV, TXT, PNG o JPG de hasta 20 MB.');
  const folder=await liveFolder(store),path=folder.path_display+'/cotizaciones';try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const existing=await dbx('files/get_metadata',{path});if(existing['.tag']!=='folder')throw new PortalError(400,'La carpeta de cotizaciones no está disponible.');}
- const id=crypto.randomUUID(),upstream=await content('files/upload_session/start',{close:false},new Uint8Array());const d=await upstream.json();const ticket=await seal('quote-upload',{id,uid:user.id,board_id:board.id,store_id:store.id,filename:name,size:b.size,sid:d.session_id,path:path+'/'+id+'_'+name,expires:Date.now()+3600000});return json({ticket});
+ const id=crypto.randomUUID(),upstream=await content('files/upload_session/start',{close:false},new Uint8Array());const d=await upstream.json();const ticket=await seal('quote-upload',{id,uid:user.id,board_id:board.id,document_id:b.document_id||null,store_id:store.id,filename:name,size:b.size,sid:d.session_id,path:path+'/'+id+'_'+name,expires:Date.now()+3600000});return json({ticket});
  }
  if((route==='quote-files/chunk'||route==='quote-files/finish')&&method==='POST'){
- const t=await unseal('quote-upload',r.headers.get('X-Upload-Ticket')||'');if(t.uid!==user.id)throw new PortalError(403,'Sesión de carga no válida.');const {store}=await quoteBoardFor(t.board_id,user);const folder=await liveFolder(store);if(!String(t.path).toLowerCase().startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(409,'La tienda cambió. Inicia otra vez la carga.');const offset=Number(r.headers.get('X-Upload-Offset'));if(!Number.isSafeInteger(offset)||offset<0||offset>t.size)throw new PortalError(400,'Posición de carga no válida.');
+ const t=await unseal('quote-upload',r.headers.get('X-Upload-Ticket')||'');if(t.uid!==user.id)throw new PortalError(403,'Sesión de carga no válida.');const {store}=t.document_id?{store:await requireStore((await quoteRecordFor(t.document_id,user)).store_id,user,'quotes')}:await quoteBoardFor(t.board_id,user);const folder=await liveFolder(store);if(!String(t.path).toLowerCase().startsWith(folder.path_lower+'/cotizaciones/'))throw new PortalError(409,'La tienda cambió. Inicia otra vez la carga.');const offset=Number(r.headers.get('X-Upload-Offset'));if(!Number.isSafeInteger(offset)||offset<0||offset>t.size)throw new PortalError(400,'Posición de carga no válida.');
  const bytes=await bounded(r,8*1024*1024);if(offset+bytes.length>t.size)throw new PortalError(413,'El respaldo supera el tamaño esperado.');
  if(route==='quote-files/chunk'){await content('files/upload_session/append_v2',{cursor:{session_id:t.sid,offset},close:false},bytes);return json({ok:true});}
  if(offset!==t.size||bytes.length)throw new PortalError(400,'La carga está incompleta.');
- let meta:any;try{meta=await dbx('files/get_metadata',{path:t.path});}catch(error){if(!(error instanceof DropboxNotFound))throw error;}if(!meta){const response=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:false,mute:false}},new Uint8Array());meta=await response.json();}if(meta['.tag']!=='file'||typeof meta.rev!=='string')throw new PortalError(409,'El destino del respaldo no es un archivo.');await supa('/rest/v1/rh_quote_files?on_conflict=id',{method:'POST',headers:{Prefer:'resolution=ignore-duplicates'},body:JSON.stringify({id:t.id,board_id:t.board_id,dropbox_id:meta.id,revision:meta.rev,filename:t.filename})});return json({ok:true});
+ let meta:any;try{meta=await dbx('files/get_metadata',{path:t.path});}catch(error){if(!(error instanceof DropboxNotFound))throw error;}if(!meta){const response=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:false,mute:false}},new Uint8Array());meta=await response.json();}if(meta['.tag']!=='file'||typeof meta.rev!=='string')throw new PortalError(409,'El destino del respaldo no es un archivo.');await supa('/rest/v1/rh_quote_files?on_conflict=id',{method:'POST',headers:{Prefer:'resolution=ignore-duplicates'},body:JSON.stringify({id:t.id,board_id:t.board_id,document_id:t.document_id||null,dropbox_id:meta.id,revision:meta.rev,filename:t.filename})});return json({ok:true});
  }
  throw new PortalError(404,'Ruta no encontrada.');
  }
+ if(p[0]==='quote-suppliers'){
+ membership(user,true);const fields='id,name,defaults,revision,updated_at';
+ if(route==='quote-suppliers'&&method==='GET'){const before=new URL(r.url).searchParams.get('before');if(before&&!uuid(before))throw new PortalError(400,'Página no válida.');const rows=await supa('/rest/v1/rh_quote_suppliers?select='+fields+'&order=id.desc&limit=100'+(before?'&id=lt.'+before:''));return json({suppliers:rows,next:rows.length===100?rows.at(-1).id:null});}
+ if(route==='quote-suppliers'&&method==='POST'||p.length===2&&method==='PATCH'){
+ const b=await bodyJSON(r),name=typeof b.name==='string'?b.name.trim():'';const nameKey=recordKey(name);if(!name||name.length>150||!nameKey)throw new PortalError(400,'Escribe el nombre del proveedor.');
+ let defaults:any;try{const v=validateQuoteRecord({title:name,type:'quote',supplier_id:null,supplier:name,columns:[{id:'d',label:'Concepto',role:'description'}],rows:[],source:'',notes:'',...b.defaults});defaults={lead_days:v.lead_days,lead_basis:v.lead_basis,terms:v.terms,tax_bp:v.tax_bp,shipping:v.shipping,currency:v.currency};}catch(e){throw new PortalError(400,(e as Error).message);}
+ if(method==='POST'){await supa('/rest/v1/rh_quote_suppliers?on_conflict=name_key',{method:'POST',headers:{Prefer:'resolution=ignore-duplicates'},body:JSON.stringify({name,name_key:nameKey,defaults,created_by:user.id})});const rows=await supa('/rest/v1/rh_quote_suppliers?name_key=eq.'+nameKey+'&select='+fields);return json({supplier:rows[0]},201);}
+ if(!uuid(p[1])||!Number.isSafeInteger(b.revision)||b.revision<1)throw new PortalError(400,'Revisa la versión del proveedor.');
+ const rows=await supa('/rest/v1/rh_quote_suppliers?id=eq.'+p[1]+'&revision=eq.'+b.revision+'&select='+fields,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({defaults,revision:b.revision+1,updated_at:new Date().toISOString()})});if(!rows.length)throw new PortalError(409,'El proveedor cambió. Actualiza la lista.');return json({supplier:rows[0]});
+ }
+ throw new PortalError(404,'Ruta no encontrada.');
+ }
+ if(p[0]==='quote-records'){
+ membership(user,true);const fields='id,store_id,kind,title,revision,updated_at';
+ if(route==='quote-records'&&method==='GET'){const params=new URL(r.url).searchParams,store=await requireStore(params.get('store'),user,'quotes'),before=params.get('before');if(before&&!uuid(before))throw new PortalError(400,'Página no válida.');const rows=await supa('/rest/v1/rh_quote_records?store_id=eq.'+store.id+'&deleted_at=is.null&select='+fields+',supplier:data->>supplier,type:data->>type&order=id.desc&limit=100'+(before?'&id=lt.'+before:''));return json({records:rows,next:rows.length===100?rows.at(-1).id:null});}
+ if(route==='quote-records'&&method==='POST'||p.length===2&&method==='PATCH'){
+ const b=await bodyJSON(r,2097152);let current:any;
+ if(method==='PATCH'){current=await quoteRecordFor(p[1],user);if(b.kind!==current.kind||b.store_id!==current.store_id)throw new PortalError(400,'No puedes cambiar el tipo o la tienda del registro.');if(!Number.isSafeInteger(b.revision)||b.revision<1)throw new PortalError(400,'Revisa la versión del registro.');}
+ const store=await requireStore(b.store_id,user,'quotes');if(!['quote','request','template','comparison-template'].includes(b.kind))throw new PortalError(400,'Tipo de registro no válido.');let data:QuoteRecordData;try{data=validateQuoteRecord(b.data,b.kind==='template');}catch(e){throw new PortalError(400,(e as Error).message);}
+ if((b.kind==='quote'||b.kind==='request')&&data.type!==b.kind)throw new PortalError(400,'El tipo de documento no coincide.');
+ if(data.supplier_id){const suppliers=await supa('/rest/v1/rh_quote_suppliers?id=eq.'+data.supplier_id+'&select=id,name');if(!suppliers[0]||suppliers[0].name!==data.supplier)throw new PortalError(400,'Selecciona el proveedor guardado o registra uno nuevo.');}
+ const value={store_id:store.id,kind:b.kind,title:data.title,data,revision:current?b.revision+1:1,updated_at:new Date().toISOString()};
+ const rows=await supa('/rest/v1/rh_quote_records?'+(current?'id=eq.'+current.id+'&deleted_at=is.null&revision=eq.'+b.revision+'&':'')+'select='+fields+',data',{method:current?'PATCH':'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(current?value:{...value,created_by:user.id})});if(!rows.length)throw new PortalError(409,'El registro cambió. Vuelve a abrirlo antes de editar.');return json({record:rows[0]},current?200:201);
+ }
+ if(p.length===2&&method==='GET'){const record=await quoteRecordFor(p[1],user);const files=await supa('/rest/v1/rh_quote_files?document_id=eq.'+record.id+'&select=id,filename&order=created_at.asc');return json({record,files});}
+ if(p.length===2&&method==='DELETE'){const record=await quoteRecordFor(p[1],user),b=await bodyJSON(r);if(b.revision!==record.revision||b.confirm_title!==record.title)throw new PortalError(409,'Confirma el nombre y versión actuales.');const rows=await supa('/rest/v1/rh_quote_records?id=eq.'+record.id+'&revision=eq.'+b.revision+'&deleted_at=is.null&select=id',{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({deleted_at:new Date().toISOString(),revision:b.revision+1})});if(!rows.length)throw new PortalError(409,'El registro cambió. Actualiza la lista.');return json({ok:true});}
+ throw new PortalError(404,'Ruta no encontrada.');
+ }
+
  if(p[0]==='quote-templates'){
  membership(user,true);const fields='id,name,revision,request_count,created_at,updated_at';
  if(route==='quote-templates'&&method==='GET'){
@@ -396,6 +452,7 @@ export async function handle(r:Request){
  }
  if(route==='quote-boards'&&method==='POST'){
  membership(user,true);const b=await bodyJSON(r,2097152);const store=await requireStore(b.store_id,user,'quotes');const data=checkedQuote(b.data);
+ if(b.source_records!==undefined){if(!Array.isArray(b.source_records)||!b.source_records.length||b.source_records.length>11||b.source_records.some((v:any)=>!uuid(v.id)||!Number.isSafeInteger(v.revision)||v.revision<1)||new Set(b.source_records.map((v:any)=>v.id)).size!==b.source_records.length)throw new PortalError(400,'Revisa las cotizaciones elegidas.');const id=await supa('/rest/v1/rpc/rh_create_record_comparison',{method:'POST',body:JSON.stringify({p_store:store.id,p_data:data,p_sources:b.source_records,p_user:user.id})});const saved=await supa('/rest/v1/rh_quote_boards?id=eq.'+id+'&select='+fields);return json({board:saved[0]},201);}
  const rows=await supa('/rest/v1/rh_quote_boards?select='+fields,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({store_id:store.id,title:data.title,data,published:false,revision:1})});return json({board:rows[0]},201);
  }
  if(!uuid(p[1]))throw new PortalError(404,'Comparativo no disponible.');
