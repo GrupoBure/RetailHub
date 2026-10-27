@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'quote-records-1';
+const API_BUILD = 'quote-records-2';
 const ORIGIN = new URL(FRONTEND).origin;
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
@@ -387,7 +387,7 @@ export async function handle(r:Request){
  const bytes=await bounded(r,8*1024*1024);if(offset+bytes.length>t.size)throw new PortalError(413,'El respaldo supera el tamaño esperado.');
  if(route==='quote-files/chunk'){await content('files/upload_session/append_v2',{cursor:{session_id:t.sid,offset},close:false},bytes);return json({ok:true});}
  if(offset!==t.size||bytes.length)throw new PortalError(400,'La carga está incompleta.');
- let meta:any;try{meta=await dbx('files/get_metadata',{path:t.path});}catch(error){if(!(error instanceof DropboxNotFound))throw error;}if(!meta){const response=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:false,mute:false}},new Uint8Array());meta=await response.json();}if(meta['.tag']!=='file'||typeof meta.rev!=='string')throw new PortalError(409,'El destino del respaldo no es un archivo.');await supa('/rest/v1/rh_quote_files?on_conflict=id',{method:'POST',headers:{Prefer:'resolution=ignore-duplicates'},body:JSON.stringify({id:t.id,board_id:t.board_id,document_id:t.document_id||null,dropbox_id:meta.id,revision:meta.rev,filename:t.filename})});return json({ok:true});
+ let meta:any;try{meta=await dbx('files/get_metadata',{path:t.path});}catch(error){if(!(error instanceof DropboxNotFound))throw error;}if(!meta){const response=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:false,mute:false}},new Uint8Array());meta={...(await response.json()),'.tag':'file'};}if(meta['.tag']!=='file'||typeof meta.id!=='string'||typeof meta.rev!=='string')throw new PortalError(409,'El destino del respaldo no es un archivo.');await supa('/rest/v1/rh_quote_files?on_conflict=id',{method:'POST',headers:{Prefer:'resolution=ignore-duplicates'},body:JSON.stringify({id:t.id,board_id:t.board_id,document_id:t.document_id||null,dropbox_id:meta.id,revision:meta.rev,filename:t.filename})});return json({ok:true});
  }
  throw new PortalError(404,'Ruta no encontrada.');
  }

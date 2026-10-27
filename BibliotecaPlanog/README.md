@@ -233,7 +233,7 @@ Validación: pruebas de importación, preservación de unidades explícitas, eje
 
 ### Cotizaciones independientes (flujo actual)
 
-Aplicar `database/008-cotizaciones-independientes.sql` y desplegar `server/retailhub-api.ts`, build `quote-records-1`. Ver `ACTUALIZACION-008.md`. La página detecta `status.features.quoteRecords`; hasta actualizar el servidor conserva el acceso a los comparativos anteriores.
+Aplicar `database/008-cotizaciones-independientes.sql` y desplegar `server/retailhub-api.ts`, build `quote-records-2`. Ver `ACTUALIZACION-008.md`. La página detecta `status.features.quoteRecords`; hasta actualizar el servidor conserva el acceso a los comparativos anteriores.
 
 `QuoteWorkspace` sustituye el asistente de preparación como flujo principal del administrador. Cotizaciones y solicitudes son registros privados por tienda y se capturan en una sola pantalla, con proveedor, condiciones, columnas genéricas editables y archivos originales. XLSX/CSV/TSV/PDF con texto y pegar desde Excel reutilizan la extracción local; no hay OCR. El mapeo distingue precio unitario e importe total, conserva columnas propias y permite excluir subtotales. No impone material ni dimensiones ni completa cantidades desconocidas. Los borradores independientes se guardan mediante el botón explícito de guardar y avisan al salir con cambios. Las ventanas se cierran con X o Esc, sin cerrar al pulsar el fondo.
 
@@ -244,3 +244,12 @@ La comparación independiente permite elegir de 1 a 10 cotizaciones (incluso del
 Machotes de cotización/solicitud conservan estructura y condiciones sin precios ni archivos. Los de comparación guardan las coincidencias por descripción y posición; aplicarlos no confirma automáticamente los conceptos. No se migran ni retiran automáticamente las cotizaciones/machotes del flujo anterior.
 
 Validación: `node server/test-quote-records.mjs`, `node server/test-quotes.mjs`, `node server/test-session.mjs`, `node server/test-api.mjs`, TypeScript y build. Los servicios de las pruebas son simulados. La comprobación visual quedó bloqueada por revisión automática; la migración requiere ejecución en el proyecto real.
+
+
+### Corrección de captura y carga de originales
+
+Las ventanas de QuoteWorkspace usan una capa fija propia, con cierre y acciones siempre visibles y cuerpo desplazable. Vista previa y editor tienen desplazamiento horizontal/vertical y celdas editables; la tabla no ensancha la página.
+
+El guardado de datos y la transferencia de archivos son estados independientes. Un respaldo fallido se muestra con **Reintentar archivo** / **Continuar sin este respaldo** y no impide salir ni marca datos guardados como cambios sin guardar. Los reintentos conservan ticket y posición; no generan otro registro ni otra revisión. Se puede cancelar la transferencia y cada petición tiene límite de tiempo. La función build `quote-records-2` reconoce correctamente el FileMetadata concreto devuelto por upload_session/finish de Dropbox. La regresión simula ese formato sin `.tag`. No requiere otra migración SQL.
+
+Pruebas adicionales: `node server/test-quote-uploads.mjs` (fallo al terminar, reintento sin duplicar, resultados parciales, cancelación y bloques de 8 MiB). La revisión visual continúa pendiente por el bloqueo automático del navegador.

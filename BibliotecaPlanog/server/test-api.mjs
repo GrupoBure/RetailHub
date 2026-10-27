@@ -128,7 +128,7 @@ globalThis.fetch=async(url,init={})=>{
  if(u.pathname==='/2/files/upload_session/start')return reply({session_id:'upload-id'});
  if(u.pathname==='/2/files/upload_session/append_v2')return reply(null,200);
  if(u.pathname==='/2/files/upload_session/finish'){
- const path=JSON.parse(new Headers(init.headers).get('Dropbox-API-Arg')).commit.path;if(path.toLowerCase().includes('/cotizaciones/')){const meta={'.tag':'file',id:'id:quote-'+crypto.randomUUID(),rev:'a1b2c3d4e5f6',name:path.split('/').at(-1),path_lower:path.toLowerCase()};quoteFileMeta.set(path,meta);quoteFileMeta.set(meta.id,meta);return reply(meta);}return reply({'.tag':'file',id:'id:pdf',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path,size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
+ const path=JSON.parse(new Headers(init.headers).get('Dropbox-API-Arg')).commit.path;if(path.toLowerCase().includes('/cotizaciones/')){const meta={'.tag':'file',id:'id:quote-'+crypto.randomUUID(),rev:'a1b2c3d4e5f6',name:path.split('/').at(-1),path_lower:path.toLowerCase()};quoteFileMeta.set(path,meta);quoteFileMeta.set(meta.id,meta);const {['.tag']:tag,...concrete}=meta;return reply(concrete);}return reply({'.tag':'file',id:'id:pdf',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path,size:9,rev:'rev-test',server_modified:'2026-10-24T00:00:00Z'});
  }
  if(u.pathname==='/2/files/download'){const range=new Headers(init.headers).get('range');return new Response('%PDF-test',{status:range?206:200,headers:range?{'content-range':'bytes 0-8/9'}:{}});}
  throw Error('Unexpected mock request: '+url);
