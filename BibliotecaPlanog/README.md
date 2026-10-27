@@ -253,3 +253,12 @@ Las ventanas de QuoteWorkspace usan una capa fija propia, con cierre y acciones 
 El guardado de datos y la transferencia de archivos son estados independientes. Un respaldo fallido se muestra con **Reintentar archivo** / **Continuar sin este respaldo** y no impide salir ni marca datos guardados como cambios sin guardar. Los reintentos conservan ticket y posición; no generan otro registro ni otra revisión. Se puede cancelar la transferencia y cada petición tiene límite de tiempo. La función build `quote-records-2` reconoce correctamente el FileMetadata concreto devuelto por upload_session/finish de Dropbox. La regresión simula ese formato sin `.tag`. No requiere otra migración SQL.
 
 Pruebas adicionales: `node server/test-quote-uploads.mjs` (fallo al terminar, reintento sin duplicar, resultados parciales, cancelación y bloques de 8 MiB). La revisión visual continúa pendiente por el bloqueo automático del navegador.
+
+
+### Vista previa convencional de cotización
+
+El botón **Vista previa** está en la captura (arriba y en las acciones inferiores) y como acción en cada registro del archivo. Muestra una hoja con proveedor, nombre de la propuesta, tienda, referencia del archivo, último guardado conocido, conceptos/cantidades/precios/importes, atributos originales, condiciones, envío, IVA y totales. Usa exclusivamente los datos capturados, sin inventar domicilio, contacto, folio o fecha de emisión del proveedor. Una captura sin guardar se identifica expresamente.
+
+La vista no guarda ni modifica la captura. Permite volver con X/Esc o **Volver a la captura**. **Imprimir / Guardar PDF** abre el diálogo de impresión del navegador; la hoja se imprime sin el portal ni las herramientas de edición. Repite encabezados de la tabla al paginar y permite condiciones largas. Los datos sin precio se mantienen pendientes; los totales parciales y el envío desconocido se indican. Si se deduce un precio unitario desde cantidad e importe, se identifica con asterisco. Se señalan discrepancias entre precio/cantidad e importe capturado, sin corregir los originales.
+
+Solo cambia el frontend, sin SQL ni despliegue de función. Verificación: `node server/test-quote-preview.mjs` (cálculos, pendientes, atributos, diferencias, estado y HTML escapado en render de servidor), TypeScript y build. La comprobación visual del navegador continúa pendiente por el bloqueo automático del entorno.
