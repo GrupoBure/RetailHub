@@ -49,7 +49,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
       </a>
       <nav aria-label="Navegación principal" style="display:flex; gap:8px">
         <a href="#nosotros">Nosotros</a>
-        <a href="#planes">Planes</a>
+        <a href="#planes">Servicios</a>
         <a href="#servicios">Otros Servicios</a>
         <a href="#capacitacion">Capacitación</a>
         <a href="#contacto">Contacto</a>
@@ -67,7 +67,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
         <p class="lead">Ordenamos, optimizamos y escalamos operaciones retail con estrategias prácticas y personalizadas.</p>
         <div class="cta">
           <a class="btn btn-primary" href="#" id="openModalBtn2">Pedir cotización</a>
-          <a class="btn btn-ghost" href="#planes">Ver planes</a>
+          <a class="btn btn-ghost" href="#planes">Ver servicios</a>
           <a class="btn btn-portal" href="./BibliotecaPlanog/">Acceso al portal</a>
         </div>
       </div>
@@ -110,7 +110,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
 
     <!-- PLANES -->
     <section id="planes" class="container">
-      <div class="section-heading reveal"><span class="section-number" aria-hidden="true">02</span><h2>Planes</h2></div>
+      <div class="section-heading reveal"><span class="section-number" aria-hidden="true">02</span><h2>Servicios</h2></div>
       <p class="section-note reveal">Elige el nivel de acompañamiento que necesita tu tienda.</p>
       <div class="grid3 pricing">
         <article id="planBasico" data-plan="Básico" class="card reveal glow" role="button" tabindex="0" aria-haspopup="dialog" style="--accent:#173d60">
@@ -123,7 +123,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
             <li>Estandarización de exhibiciones</li>
             <li>Controles básicos de inventario</li>
           </ul>
-          <span class="plan-more">Ver detalle del plan<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span>
+          <span class="plan-more">Ver detalle del servicio<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span>
         </article>
         <article id="planPro" data-plan="Pro" class="card reveal glow" role="button" tabindex="0" aria-haspopup="dialog" style="--accent:#2975a5">
           <span class="pill">Pro</span>
@@ -135,7 +135,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
             <li>Indicadores operativos básicos</li>
             <li>Formación de líderes multifuncionales</li>
           </ul>
-          <span class="plan-more">Ver detalle del plan<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span>
+          <span class="plan-more">Ver detalle del servicio<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span>
         </article>
         <article id="planMax" data-plan="Max" class="card reveal glow" role="button" tabindex="0" aria-haspopup="dialog" style="--accent:#00a85c">
           <span class="pill">Max</span>
@@ -147,7 +147,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
             <li>Liderazgo y manejo de equipos</li>
             <li>Programa de capacitación mensual</li>
           </ul>
-          <span class="plan-more">Ver detalle del plan<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span>
+          <span class="plan-more">Ver detalle del servicio<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span>
         </article>
       </div>
     </section>
@@ -228,7 +228,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
     <section id="contacto" class="container">
       <div class="section-heading reveal"><span class="section-number" aria-hidden="true">05</span><h2>Contacto</h2></div>
       <div class="card contact-card reveal">
-        <div><h3>Hablemos de tu tienda.</h3><p>Cuéntanos de tu tienda y te proponemos un plan claro.</p><a class="btn" href="mailto:retailoc.soporte@gmail.com">Escríbenos <span aria-hidden="true">↗</span></a></div>
+        <div><h3>Hablemos de tu tienda.</h3><p>Cuéntanos de tu tienda y te proponemos una propuesta clara.</p><a class="btn" href="mailto:retailoc.soporte@gmail.com">Escríbenos <span aria-hidden="true">↗</span></a></div>
         <div class="contact-details"><span class="section-kicker">ESTAMOS EN CONTACTO</span><a href="mailto:retailoc.soporte@gmail.com">retailoc.soporte@gmail.com</a></div>
       </div>
     </section>
@@ -309,7 +309,7 @@ form{display:grid;gap:14px}.row{display:grid;grid-template-columns:repeat(2,minm
   <div class="modal-backdrop" id="planModal">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="planModalTitle">
       <header style="display:flex; align-items:center; gap:10px;">
-        <h3 id="planModalTitle">Detalle del plan</h3>
+        <h3 id="planModalTitle">Detalle del servicio</h3>
         <button type="button" class="close" id="closePlanModalBtn">Cerrar ✕</button>
       </header>
 
@@ -509,7 +509,7 @@ function initAgenda(){
     timeSel.appendChild(opt);
   });
 
-  agendaHelper.textContent = LAST_PLAN_PICKED ? `Plan seleccionado: ${LAST_PLAN_PICKED}` : '';
+  agendaHelper.textContent = LAST_PLAN_PICKED ? `Servicio seleccionado: ${LAST_PLAN_PICKED}` : '';
 }
 
 // Confirmar cita
@@ -543,7 +543,7 @@ agendaConfirm?.addEventListener('click', async ()=>{
   ].filter(Boolean).join(', ');
 
   const fechaNice = new Date(fechaISO+'T00:00:00').toLocaleDateString('es-MX',{weekday:'long', day:'2-digit', month:'long', year:'numeric'});
-  const plan = (typeof LAST_PLAN_PICKED==='string' && LAST_PLAN_PICKED) ? LAST_PLAN_PICKED : 'Plan';
+  const plan = (typeof LAST_PLAN_PICKED==='string' && LAST_PLAN_PICKED) ? LAST_PLAN_PICKED : 'Servicio';
   const subject = `Cita — ${plan} — ${fechaNice} ${formatHour12(h)}`;
   const mensaje = [
     `Solicitud de cita para: ${plan}`,
@@ -559,7 +559,7 @@ agendaConfirm?.addEventListener('click', async ()=>{
   data.set('mensaje', mensaje);
   data.set('contacto_nombre', nombre);
   data.set('contacto_tel', tel);
-  data.set('rubro', 'Planes');
+  data.set('rubro', 'Servicios');
   data.set('servicio', plan);
 
   const btn=agendaConfirm, prev=btn.textContent; btn.disabled=true; btn.textContent='Enviando...';
@@ -647,9 +647,9 @@ const PLAN_DETAIL = {
   if (!card) return;
   card.style.cursor = 'pointer';
   card.addEventListener('click', ()=>{
-    const planName = card.dataset.plan || 'Plan';
-    planModalTitle.textContent = `Detalle del plan — ${planName}`;
-    planContent.innerHTML = PLAN_DETAIL[planName] || '<p>Plan no disponible.</p>';
+    const planName = card.dataset.plan || 'Servicio';
+    planModalTitle.textContent = `Detalle del servicio — ${planName}`;
+    planContent.innerHTML = PLAN_DETAIL[planName] || '<p>Servicio no disponible.</p>';
     planCtaBtn.textContent = PLAN_CTA_TEXT;
 
     const planKey = planName.normalize('NFD').replace(/[\u0300-\u036f]/g,''); // 'Básico' -> 'Basico'
