@@ -1,0 +1,19 @@
+{
+  "name": "retailhub-mail-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:mail": "node test-mail.mjs",
+    "test:mail-database": "node test-mail-database.mjs"
+  },
+  "dependencies": {
+    "imapflow": "2.9.1",
+    "nodemailer": "10.2.1",
+    "postal-mime": "4.1.4"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "linkedom": "0.18.12",
+    "@electric-sql/pglite": "0.5.12"
+  }
+}

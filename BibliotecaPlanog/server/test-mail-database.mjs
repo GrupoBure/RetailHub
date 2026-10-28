@@ -1,0 +1,31 @@
+import {createRequire} from 'node:module';
+import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+const deps=process.env.RH_MAIL_TEST_DEPENDENCIES?createRequire(process.env.RH_MAIL_TEST_DEPENDENCIES+'/package.json'):createRequire(import.meta.url);
+const {PGlite}=deps('@electric-sql/pglite');
+const pg=await PGlite.create();
+const sql=readFileSync(new URL('../database/009-correo.sql',import.meta.url),'utf8');
+let checks=0;async function check(name,fn){await fn();console.log('PASS '+name);checks++;}
+const admin='11111111-1111-4111-8111-111111111111',reader='22222222-2222-4222-8222-222222222222',other='33333333-3333-4333-8333-333333333333';
+const cipher='v1.synthetic-nonce.synthetic-encrypted-password';
+const q=(text,values=[])=>pg.query(text,values);
+async function assign({actor=admin,id=null,email='synthetic@retailhub.mx',owner=reader,enabled=true,revision=0,confirm=false}={}){return (await q('select public.rh_mail_assign($1,$2,$3,$4,$5,$6,$7,$8) id',[actor,id,email,owner,enabled,cipher,revision,confirm])).rows[0].id;}
+async function claim({user=reader,account,revision=1,id=crypto.randomUUID(),hash='a'.repeat(64)}={}){return (await q('select public.rh_mail_claim_send($1,$2,$3,$4,$5,$6) result',[user,account,revision,id,hash,'<rh-'+id+'@retailhub.mx>'])).rows[0].result;}
+try{
+ await check('migration refuses the wrong project and rolls back without creating mail tables',async()=>{await assert.rejects(()=>pg.exec(sql),/Proyecto incorrecto/);await pg.exec('rollback');assert.equal((await q("select to_regclass('public.rh_mail_accounts') name")).rows[0].name,null);});
+ await pg.exec('create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key,raw_app_meta_data jsonb);create table public.rh_stores(id uuid);create table public.rh_documents(id uuid);');
+ for(const [id,role] of [[admin,'admin'],[reader,'reader'],[other,'reader']])await q('insert into auth.users values($1,$2)',[id,{rh_portal:true,role}]);
+ await check('the complete migration executes and can be reapplied without losing data',async()=>{await pg.exec(sql);await pg.exec(sql);assert.equal((await q("select count(*)::int n from pg_tables where tablename in ('rh_mail_accounts','rh_mail_sends') and rowsecurity")).rows[0].n,2);});
+ await check('anonymous and authenticated roles cannot read passwords or invoke privileged mail RPCs',async()=>{for(const role of ['anon','authenticated']){await pg.exec('set role '+role);try{await assert.rejects(()=>q('select * from public.rh_mail_accounts'),/permission denied/);await assert.rejects(()=>assign(),/permission denied/);}finally{await pg.exec('reset role');}}});
+ await check('readers cannot assign a mailbox even when an RPC is called by the trusted server',async()=>{await assert.rejects(()=>assign({actor:reader}),/mail_access/);});
+ const account=await assign();
+ await check('an account belongs to one active portal user and one mailbox per user is enforced',async()=>{await assert.rejects(()=>assign({email:'second@retailhub.mx'}),/duplicate key/);await q('update auth.users set raw_app_meta_data=$2 where id=$1',[other,{rh_portal:true,role:'reader',disabled:true}]);await assert.rejects(()=>assign({email:'other@retailhub.mx',owner:other}),/mail_owner/);await q('update auth.users set raw_app_meta_data=$2 where id=$1',[other,{rh_portal:true,role:'reader'}]);});
+ await check('assignment changes require the exact revision and explicit reassignment confirmation',async()=>{await assert.rejects(()=>assign({id:account,revision:null}),/mail_conflict/);await assert.rejects(()=>assign({id:account,revision:99}),/mail_conflict/);await assert.rejects(()=>assign({id:account,revision:1,owner:other}),/mail_confirm/);});
+ await check('changing ownership clears the old personal signature and increments the revision',async()=>{await q('update public.rh_mail_accounts set signature=$2 where id=$1',[account,{name:'Previous owner'}]);await assign({id:account,revision:1,owner:other,confirm:true});const a=(await q('select * from public.rh_mail_accounts where id=$1',[account])).rows[0];assert.deepEqual(a.signature,{});assert.equal(a.owner_id,other);assert.equal(a.revision,2);});
+ await assign({id:account,owner:reader,revision:2,confirm:true});
+ await check('sending requires a fresh enabled owner, an unchanged account revision and trusted portal metadata',async()=>{await assert.rejects(()=>claim({account,user:other,revision:3}),/mail_access/);await assert.rejects(()=>claim({account,revision:null}),/mail_access/);await assert.rejects(()=>claim({account,revision:1}),/mail_access/);await q('update auth.users set raw_app_meta_data=$2 where id=$1',[reader,{rh_portal:true,role:'reader',disabled:true}]);await assert.rejects(()=>claim({account,revision:3}),/mail_access/);await q('update auth.users set raw_app_meta_data=$2 where id=$1',[reader,{rh_portal:true,role:'reader'}]);});
+ await check('a send ID is claimed once; repeated claims return the same state without another job',async()=>{const id=crypto.randomUUID();assert.equal((await claim({account,revision:3,id})).created,true);const second=await claim({account,revision:3,id});assert.equal(second.created,false);assert.equal(second.status,'preparing');assert.equal((await q('select count(*)::int n from public.rh_mail_sends where id=$1',[id])).rows[0].n,1);await assert.rejects(()=>claim({account,revision:3,id,hash:'b'.repeat(64)}),/mail_conflict/);});
+ await check('the database limits requests atomically instead of relying on one edge instance memory',async()=>{await q('delete from public.rh_mail_sends');for(let i=0;i<10;i++)await claim({account,revision:3});await assert.rejects(()=>claim({account,revision:3}),/mail_rate/);});
+ await check('retiring a mailbox blocks sends and keeps the mailbox row and its history',async()=>{await assign({id:account,revision:3,owner:null,enabled:false,confirm:true});await assert.rejects(()=>claim({account,revision:4}),/mail_access/);assert.equal((await q('select count(*)::int n from public.rh_mail_sends')).rows[0].n,10);assert.equal((await q('select count(*)::int n from public.rh_mail_accounts')).rows[0].n,1);});
+ console.log(checks+' mail SQL checks passed against local Postgres (PGlite).');
+}finally{await pg.close();}
