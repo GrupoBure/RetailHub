@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test:mail": "node test-mail.mjs",
-    "test:mail-database": "node test-mail-database.mjs"
+    "test:mail-database": "node test-mail-database.mjs",
+    "test:activity": "node test-activity.mjs"
   },
   "dependencies": {
     "imapflow": "2.9.1",

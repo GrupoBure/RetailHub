@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'quote-records-2-domain-1';
+const API_BUILD = 'activity-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -47,11 +47,11 @@ async function bounded(r:Request,max:number){
  const result=new Uint8Array(total);let at=0;for(const part of parts){result.set(part,at);at+=part.length;}return result;
 }
 async function bodyJSON(r:Request,max=16384){try{return JSON.parse(new TextDecoder().decode(await bounded(r,max)));}catch(e){if(e instanceof PortalError)throw e;throw new PortalError(400,'Solicitud no válida.');}}
-export async function supa(path:string,init:RequestInit={},bearer?:string):Promise<any>{
+export async function supa(path:string,init:RequestInit={},bearer?:string,timeoutMs=30000):Promise<any>{
  const c=config();if(!authReady())throw new PortalError(503,'La conexión de usuarios está pendiente de activación.');
  const h=new Headers(init.headers);h.set('apikey',c.anon!);const auth=bearer||c.service!;if(!auth.startsWith('sb_'))h.set('Authorization','Bearer '+auth);h.set('Content-Type','application/json');
  if(!bearer)h.set('apikey',c.service!);
- const r=await fetch(c.url+path,{...init,headers:h,signal:AbortSignal.timeout(30000)});
+ const r=await fetch(c.url+path,{...init,headers:h,signal:AbortSignal.timeout(timeoutMs)});
  if(!r.ok){const e=await r.json().catch(()=>({})) as any;
  if(r.status===429)throw new PortalError(429,'Demasiados intentos. Espera unos minutos y vuelve a intentar.');
  if(r.status===401||r.status===403)throw new PortalError(401,'La sesión no es válida. Vuelve a iniciar sesión.');
@@ -305,17 +305,22 @@ export function validateQuoteRecord(v:any,allowMissingSupplier=false):QuoteRecor
 
 async function quoteRecordFor(id:unknown,user:any){membership(user,true);if(!uuid(id))throw new PortalError(404,'Cotización no disponible.');const rows=await supa('/rest/v1/rh_quote_records?id=eq.'+id+'&deleted_at=is.null&select=id,store_id,kind,title,revision,data,updated_at');if(!rows[0])throw new PortalError(404,'Cotización no disponible.');await requireStore(rows[0].store_id,user,'quotes');return rows[0];}
 
+export async function activityRecord(token:string,user:any,kind:string){
+ try{const payload=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!uuid(payload.session_id)||payload.sub!==user.id)return false;
+ const u=safeUser(user);await supa('/rest/v1/rpc/rh_activity_record',{method:'POST',body:JSON.stringify({p_user:user.id,p_session:payload.session_id,p_name:String(u.name||'').slice(0,100),p_username:String(u.username||'').slice(0,100),p_kind:kind})},undefined,4000);return true;}catch{return false;}
+}
 async function handleRequest(r:Request){
  try{
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
  try{data=await supa('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password})},config().anon);}catch(e){if(e instanceof PortalError&&e.status!==429&&e.status!==503)throw new PortalError(401,'Usuario o contraseña incorrectos.');throw e;}
  if(!data.user?.app_metadata?.rh_portal||data.user?.app_metadata?.disabled)throw new PortalError(403,'Este usuario no tiene acceso al portal.');
+ await activityRecord(data.access_token,data.user,'login');
  return json(sessionData(data));}
  if(route==='refresh'&&method==='POST'){
  const b=await bodyJSON(r);const t=typeof b.refresh_token==='string'&&b.refresh_token.length<4096?b.refresh_token:'';if(!t)throw new PortalError(401,'Vuelve a iniciar sesión.');
@@ -323,7 +328,9 @@ async function handleRequest(r:Request){
  if(!d.user?.app_metadata?.rh_portal||d.user?.app_metadata?.disabled)throw new PortalError(403,'Acceso desactivado.');
  return json(sessionData(d));}
  if(route==='logout'&&method==='POST'){
- const t=bearer(r);if(t)await supa('/auth/v1/logout?scope=local',{method:'POST'},t).catch(()=>{});
+ const t=bearer(r);let exiting:any;try{exiting=await requireUser(r);}catch{}
+ if(t)await supa('/auth/v1/logout?scope=local',{method:'POST'},t);
+ if(exiting)await activityRecord(t,exiting,'logout');
  return json({ok:true});}
  // OAuth callback and short-lived file tickets authenticate independently.
  if(route==='dropbox/callback'&&method==='GET'){
@@ -349,6 +356,12 @@ async function handleRequest(r:Request){
  }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
+ if(route==='activity/heartbeat'&&method==='POST')return json({recorded:await activityRecord(bearer(r),user,'pulse')});
+ if(route==='activity'&&method==='GET'){
+ await requireUser(r,true);const query=new URL(r.url).searchParams;const from=query.get('from'),to=query.get('to'),who=query.get('user'),offset=Number(query.get('offset')||0);
+ if(!from||!to||!Number.isFinite(Date.parse(from))||!Number.isFinite(Date.parse(to))||(who&&!uuid(who))||!Number.isInteger(offset)||offset<0||offset>1000000)throw new PortalError(400,'Filtros no válidos.');
+ return json(await supa('/rest/v1/rpc/rh_activity_report',{method:'POST',body:JSON.stringify({p_admin:user.id,p_from:from,p_to:to,p_user:who||null,p_offset:offset})}));}
+
  if(route==='stores'&&method==='GET'){
  const scope=new URL(r.url).searchParams.get('scope');if(scope&&scope!=='quotes')throw new PortalError(400,'Ámbito de tiendas no válido.');const ids=scope==='quotes'?quoteStoreIds(user):storeIds(user);if(user.app_metadata.role!=='admin'&&!ids.length)return json({stores:[]});
  const filter=user.app_metadata.role==='admin'?'':'&id=in.('+ids.join(',')+')';
