@@ -137,6 +137,19 @@ const request=(path,{method='GET',token='valid',body,headers={}}={})=>handler(ne
 let checks=0;
 async function check(name,fn){await fn();checks++;console.log('PASS '+name);}
 await check('CORS preflight authorizes GitHub origin',async()=>{const r=await request('documents?store='+storeA,{method:'OPTIONS',token:null});assert.equal(r.status,204);assert.equal(r.headers.get('access-control-allow-origin'),'https://grupobure.github.io');});
+await check('retailhub domains receive their own CORS headers on preflight, success and errors',async()=>{
+ for(const origin of ['https://retailhub.mx','https://www.retailhub.mx']){
+  for(const [path,options,status] of [['status',{token:null},200],['documents',{method:'OPTIONS',token:null},204],['documents',{token:null},401]]){
+   const r=await request(path,{...options,headers:{Origin:origin}});assert.equal(r.status,status);assert.equal(r.headers.get('access-control-allow-origin'),origin);assert.ok(r.headers.get('vary').includes('Origin'));
+  }
+ }
+});
+await check('lookalike and insecure domains receive no CORS access',async()=>{
+ for(const origin of ['https://retailhub.mx.evil.example','http://retailhub.mx','https://evilretailhub.mx','null']){
+  const r=await request('status',{headers:{Origin:origin}});assert.equal(r.headers.get('access-control-allow-origin'),null);
+  assert.equal((await request('status',{method:'OPTIONS',headers:{Origin:origin}})).status,403);
+ }
+});
 await check('foreign origin cannot log in',async()=>assert.equal((await request('login',{method:'POST',body:{},headers:{Origin:'https://other.example'}})).status,403));
 await check('anonymous and invalid sessions cannot list documents',async()=>{assert.equal((await request('documents?store='+storeA,{token:null})).status,401);assert.equal((await request('documents?store='+storeA,{token:'invalid'})).status,401);});
 await check('login returns only user session, never service credentials',async()=>{const r=await request('login',{method:'POST',token:null,body:{username:'victor',password:'password-test'}});assert.equal(r.status,200);const d=await r.json();assert.equal(d.session.access_token,'valid');assert.ok(!JSON.stringify(d).includes('private-test'));});
@@ -156,6 +169,15 @@ await check('admin upload accepts PDF chunks and commits metadata; invalid first
  assert.equal((await request('upload/chunk',{method:'POST',headers,body:'%PDF-test'})).status,200);
  assert.equal((await request('upload/finish',{method:'POST',headers:{...headers,'X-Upload-Offset':'9'},body:''})).status,200);
  const saved=JSON.parse(calls.at(-1).init.body);assert.equal(saved.filename,'Prueba á.pdf');assert.equal(saved.category,'Planogramas');assert.equal(saved.published,undefined);
+});
+await check('Dropbox returns to the exact approved domain that started authorization',async()=>{
+ for(const origin of ['https://retailhub.mx','https://www.retailhub.mx']){
+  const start=await request('dropbox/connect',{method:'POST',headers:{Origin:origin}});assert.equal(start.status,200);
+  const state=new URL((await start.json()).url).searchParams.get('state');
+  const result=await request('dropbox/callback?code=example&state='+encodeURIComponent(state),{token:null});
+  assert.equal(result.status,302);assert.equal(result.headers.get('location'),origin+'/BibliotecaPlanog/?conexion=dropbox');
+ }
+ oauthExchanges=0;
 });
 await check('Dropbox OAuth validates state, consumes it once and encrypts refresh token',async()=>{const r=await request('dropbox/connect',{method:'POST'});assert.equal(r.status,200);const state=new URL((await r.json()).url).searchParams.get('state');const callback='dropbox/callback?code=example&state='+encodeURIComponent(state);assert.equal((await request('dropbox/callback?code=example&state=fake',{token:null})).status,403);const result=await request(callback,{token:null});assert.equal(result.status,302);assert.equal(result.headers.get('location'),'https://grupobure.github.io/RetailHub/BibliotecaPlanog/?conexion=dropbox');assert.notEqual(settings.get('dropbox_refresh'),'private-dbx-refresh');assert.equal((await request(callback,{token:null})).status,403);assert.equal(oauthExchanges,1);});
 await check('anonymous, reader and disabled admin cannot edit or delete users',async()=>{

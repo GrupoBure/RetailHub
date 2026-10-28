@@ -3,8 +3,14 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'quote-records-2';
+const API_BUILD = 'quote-records-2-domain-1';
 const ORIGIN = new URL(FRONTEND).origin;
+const FRONTENDS:Record<string,string> = {
+ [ORIGIN]:FRONTEND,
+ 'https://retailhub.mx':'https://retailhub.mx/BibliotecaPlanog/',
+ 'https://www.retailhub.mx':'https://www.retailhub.mx/BibliotecaPlanog/'
+};
+const allowedOrigin=(origin:string|null)=>origin!==null&&Object.hasOwn(FRONTENDS,origin);
 const env = new Proxy({}, {get:(_target,key)=>Deno.env.get(String(key))});
 function injected(name:string, legacy:string) {
  const old=Deno.env.get(legacy); if(old)return old;
@@ -25,7 +31,7 @@ export const config = () => {
 };
 export const authReady=()=>{const c=config();return !!(c.url&&c.anon&&c.service);};
 export const json=(data:unknown,status=200,extra:HeadersInit={})=>new Response(JSON.stringify(data),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store',...extra}});
-export function sameOrigin(r:Request){const o=r.headers.get('origin');if(o && o!==ORIGIN)throw new PortalError(403,'Solicitud no permitida.');}
+export function sameOrigin(r:Request){const o=r.headers.get('origin');if(o && !allowedOrigin(o))throw new PortalError(403,'Solicitud no permitida.');}
 const bearer=(r:Request)=>r.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]||'';
 function membership(u:any,admin=false){
  if(!u?.app_metadata?.rh_portal||u.app_metadata.disabled)throw new PortalError(403,'Este usuario no tiene acceso al portal.');
@@ -299,7 +305,7 @@ export function validateQuoteRecord(v:any,allowMissingSupplier=false):QuoteRecor
 
 async function quoteRecordFor(id:unknown,user:any){membership(user,true);if(!uuid(id))throw new PortalError(404,'Cotización no disponible.');const rows=await supa('/rest/v1/rh_quote_records?id=eq.'+id+'&deleted_at=is.null&select=id,store_id,kind,title,revision,data,updated_at');if(!rows[0])throw new PortalError(404,'Cotización no disponible.');await requireStore(rows[0].store_id,user,'quotes');return rows[0];}
 
-export async function handle(r:Request){
+async function handleRequest(r:Request){
  try{
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
@@ -329,7 +335,7 @@ export async function handle(r:Request){
  const c=config();const result=await fetch('https://api.dropboxapi.com/oauth2/token',{method:'POST',body:new URLSearchParams({code:u.searchParams.get('code')!,grant_type:'authorization_code',client_id:c.dbxKey!,client_secret:c.dbxSecret!,redirect_uri:endpoint(r)+'/dropbox/callback'})});
  const data=await result.json();if(!result.ok||!data.refresh_token)throw new PortalError(400,'No se pudo finalizar la autorización de Dropbox.');
  await setting('dropbox_refresh',await encrypted(data.refresh_token));tokenCache=undefined;
- return new Response(null,{status:302,headers:{...cors,Location:FRONTEND+'?conexion=dropbox','Cache-Control':'no-store'}});}
+ return new Response(null,{status:302,headers:{...cors,Location:(Object.values(FRONTENDS).includes(state.frontend)?state.frontend:FRONTEND)+'?conexion=dropbox','Cache-Control':'no-store'}});}
  if(p[0]==='documents'&&p[1]&&p[2]==='file'&&method==='GET'){
  const user=await ticketUser(r,p[1]);const d=await documentRecord(p[1],user);
  const range=r.headers.get('range');if(range&&!/^bytes=(?:\d+-\d*|-\d+)$/.test(range))throw new PortalError(416,'Rango no válido.');
@@ -563,7 +569,7 @@ export async function handle(r:Request){
  if(route==='dropbox/connect'&&method==='POST'){
  const c=config();if(!c.dbxKey||!c.dbxSecret||!c.secret)throw new PortalError(503,'Configura primero los secretos de Dropbox.');
  const nonce=crypto.randomUUID(),expires=Date.now()+600000;
- await transient('oauth:'+nonce,{uid:user.id,expires});const state=await seal('oauth',{nonce,uid:user.id,expires});
+ await transient('oauth:'+nonce,{uid:user.id,expires});const state=await seal('oauth',{nonce,uid:user.id,expires,frontend:FRONTENDS[r.headers.get('origin')||'']||FRONTEND});
  const url='https://www.dropbox.com/oauth2/authorize?'+new URLSearchParams({client_id:c.dbxKey,response_type:'code',token_access_type:'offline',redirect_uri:endpoint(r)+'/dropbox/callback',state});
  return json({url});}
  if(route==='users'&&method==='GET'){
@@ -621,5 +627,16 @@ export async function handle(r:Request){
  return json({ok:true});}}
  throw new PortalError(404,'Ruta no encontrada.');
  }catch(e){if(e instanceof PortalError)return json({error:e.message},e.status);return json({error:'No se pudo completar la solicitud. Intenta nuevamente.'},500);}
+}
+export async function handle(r:Request){
+ const response=await handleRequest(r);
+ const headers=new Headers(response.headers);
+ const origin=r.headers.get('origin');
+ // Resolve CORS per request, including errors and streamed file responses.
+ // Never store the caller's origin in shared mutable state.
+ if(allowedOrigin(origin))headers.set('Access-Control-Allow-Origin',origin!);
+ else if(origin)headers.delete('Access-Control-Allow-Origin');
+ headers.set('Vary',Array.from(new Set((headers.get('Vary')||'').split(',').map(v=>v.trim()).filter(Boolean).concat('Origin'))).join(', '));
+ return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
 Deno.serve(handle);
