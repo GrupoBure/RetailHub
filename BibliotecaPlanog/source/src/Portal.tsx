@@ -1,3 +1,4 @@
+import {startPresence} from './presence';
 import {PortalRequestError,invalidPortalSession,portalAccessKey} from './portal-session';
 import {useSessionRevalidation} from './use-session-revalidation';
 import Quotes from './QuoteWorkspace';
@@ -60,7 +61,7 @@ export default function Portal(){
  const d:any=r.status===204?{}:await r.json().catch(()=>({error:isMail?'El servidor de correo no está disponible.':'No se pudo leer la respuesta del portal.'}));if(!r.ok)throw new PortalRequestError(d.error||'No se pudo completar la solicitud.',r.status);saveSession(d);return d;
  };
  useEffect(()=>{let active=true;setMailAccess(false);if(user&&!preview)api('mail/me').then(d=>{if(active)setMailAccess(!!d.account);}).catch(()=>{});return()=>{active=false;};},[user?.id,user?.role,preview]);
- useEffect(()=>{if(!user||preview||!activityReady)return;let lastInput=Date.now(),lastPulse=0,pending=false;const activity=()=>{lastInput=Date.now();};const pulse=async()=>{if(pending||document.visibilityState!=='visible'||!document.hasFocus()||Date.now()-lastInput>90000||Date.now()-lastPulse<55000)return;pending=true;lastPulse=Date.now();try{await api('activity/heartbeat',{method:'POST'});}catch{}finally{pending=false;}};const onInput=()=>{activity();void pulse();};for(const name of ['pointerdown','keydown','wheel','touchstart'])window.addEventListener(name,onInput,{passive:true});void pulse();const timer=window.setInterval(pulse,60000);return()=>{clearInterval(timer);for(const name of ['pointerdown','keydown','wheel','touchstart'])window.removeEventListener(name,onInput);};},[user?.id,preview,activityReady]);
+ useEffect(()=>{if(!user||preview||!activityReady)return;return startPresence(api);},[user?.id,preview,activityReady]);
  const accessKey=portalAccessKey(user);
  const [fileLink,setFileLink]=useState<{url:string;download:string}|null>(null),[fileError,setFileError]=useState('');
  useEffect(()=>{let active=true;setFileLink(null);setFileError('');if(selected&&!preview&&!isExcelDoc(selected)){api('documents/'+selected.id+'/link',{method:'POST'}).then(d=>{if(active)setFileLink(d);}).catch(e=>{if(active)setFileError(e.message);});}return()=>{active=false;};},[selected,preview]);

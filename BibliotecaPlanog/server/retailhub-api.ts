@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'activity-1';
+const API_BUILD = 'activity-2';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -356,7 +356,7 @@ async function handleRequest(r:Request){
  }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
- if(route==='activity/heartbeat'&&method==='POST')return json({recorded:await activityRecord(bearer(r),user,'pulse')});
+ if(route==='activity/heartbeat'&&method==='POST')return json({recorded:await activityRecord(bearer(r),user,(r.body?await bodyJSON(r):{}).active===true?'pulse':'idle')});
  if(route==='activity'&&method==='GET'){
  await requireUser(r,true);const query=new URL(r.url).searchParams;const from=query.get('from'),to=query.get('to'),who=query.get('user'),offset=Number(query.get('offset')||0);
  if(!from||!to||!Number.isFinite(Date.parse(from))||!Number.isFinite(Date.parse(to))||(who&&!uuid(who))||!Number.isInteger(offset)||offset<0||offset>1000000)throw new PortalError(400,'Filtros no válidos.');
