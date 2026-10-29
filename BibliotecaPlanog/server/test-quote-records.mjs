@@ -5,6 +5,17 @@ const modelUrl=uri(read('quote-records.ts')),coreUrl=uri(read('quotes-core.ts'))
 const sid='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',uid='11111111-1111-4111-8111-111111111111';
 const base={title:'Servicio sin medidas',type:'quote',supplier_id:null,supplier:'Demo',currency:'MXN',lead_days:4,lead_basis:'Hábiles desde anticipo',terms:'50%',tax_bp:1600,shipping:0,source:'',notes:'',columns:[{id:'c',label:'Servicio',role:'description'},{id:'q',label:'Cantidad',role:'quantity'},{id:'p',label:'Precio unitario',role:'unit_price'},{id:'x',label:'Acabado',role:'attribute'}],rows:[{id:'r',cells:['Instalación','2','30','Mate']}]};
 assert.equal(m.recordTotals(m.validateQuoteRecord(base)).total,6960);assert.equal(m.recordAmount(base,base.rows[0]),6000);
+// Blank imported totals must behave like an omitted total column in every consumer.
+const automatic={...base,columns:[...base.columns,{id:'total',label:'Total',role:'amount'}],rows:[{id:'r',cells:['Instalación','2','30','Mate','  ']}]};
+assert.equal(m.recordAmount(automatic,automatic.rows[0]),6000);
+assert.deepEqual(m.recordTotals(automatic),{subtotal:6000,total:6960,missing:0,priced:1});
+for(const [total,expected] of [['50',5000],['0',0],['no disponible',null]])assert.equal(m.recordAmount(automatic,{id:'r',cells:['Instalación','2','30','Mate',total]}),expected);
+assert.equal(m.recordAmount(automatic,{id:'r',cells:['Instalación','','30','Mate','']}),null);
+assert.equal(m.recordAmount(automatic,{id:'r',cells:['Instalación','2','','Mate','']}),null);
+assert.equal(m.recordAmount(automatic,{id:'r',cells:['Instalación','2,5','$1,234.50','Mate','']}),308625);
+assert.equal(m.recordAmount(automatic,{id:'r',cells:['Instalación','3','0.335','Mate','']}),101);
+assert.equal(m.recordAmount(automatic,{id:'r',cells:['Instalación','3','0','Mate','']}),0);
+assert.equal(automatic.rows[0].cells[4],'  ');
 const amount={...base,columns:base.columns.map(v=>v.id==='p'?{...v,role:'amount'}:v)};assert.equal(m.recordAmount(amount,amount.rows[0]),3000);
 assert.equal(m.validateQuoteRecord({...base,rows:[{id:'r',cells:['Instalación','','','']}]}).rows.length,1);assert.equal(m.recordNumber('1e3'),null);assert.equal(m.recordNumber('1.234,50'),1234.5);
 assert.throws(()=>m.validateQuoteRecord({...base,columns:[...base.columns,{id:'second',label:'Otro precio',role:'amount'},{id:'third',label:'Precio',role:'amount'}]}));
@@ -32,3 +43,4 @@ await check('standalone original-file links stay administrator-only',async()=>{r
 await check('soft deletion requires the exact version and hides future access without deleting backups',async()=>{assert.equal((await request('quote-records/'+saved.id,'DELETE',{revision:9,confirm_title:saved.title})).status,409);assert.equal((await request('quote-records/'+saved.id,'DELETE',{revision:1,confirm_title:saved.title})).status,200);assert.ok(records.get(saved.id).deleted_at);assert.equal((await request('quote-records/'+saved.id)).status,404);assert.ok(!calls.some(c=>c.u.host.includes('dropbox')));});
 const sql=readFileSync(new URL('../database/008-cotizaciones-independientes.sql',import.meta.url),'utf8');assert.ok(sql.includes('for share'));assert.ok(sql.includes('source_snapshots'));assert.ok(sql.includes('rh_quote_files_one_owner'));assert.ok(sql.includes("r->>'quantity' is null"));assert.ok(sql.includes('revoke all on public.rh_quote_suppliers,public.rh_quote_records from public,anon,authenticated'));
 console.log('Standalone quote model, matching, totals and '+checks+' API scenarios passed (mocked services).');
+

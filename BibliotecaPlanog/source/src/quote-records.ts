@@ -8,7 +8,13 @@ export type SavedSupplier={id:string;name:string;revision:number;defaults:{lead_
 export const recordKey=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
 export function recordNumber(text:string):number|null{let v=text.trim().replace(/[$\s]/g,'');if(!v)return null;if(v.includes(',')&&v.includes('.'))v=v.lastIndexOf(',')>v.lastIndexOf('.')?v.replace(/\./g,'').replace(',','.'):v.replace(/,/g,'');else if(v.includes(','))v=/^\d{1,3}(,\d{3})+$/.test(v)?v.replace(/,/g,''):v.replace(',','.');if(!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(v))return null;const n=Number(v);return Number.isFinite(n)?n:null;}
 export function recordCell(d:QuoteRecordData,r:RecordRow,role:RecordRole){const i=d.columns.findIndex(c=>c.role===role);return i<0?'':r.cells[i]||'';}
-export function recordAmount(d:QuoteRecordData,r:RecordRow){const total=recordNumber(recordCell(d,r,'amount'));if(d.columns.some(c=>c.role==='amount'))return total===null?null:Math.round(total*100);const price=recordNumber(recordCell(d,r,'unit_price')),qty=recordNumber(recordCell(d,r,'quantity'));return price===null||qty===null?null:Math.round(price*qty*100);}
+export function recordAmount(d:QuoteRecordData,r:RecordRow){
+ const rawTotal=recordCell(d,r,'amount');
+ // A supplied total (including zero) wins; only an empty total is automatic.
+ if(rawTotal.trim()){const total=recordNumber(rawTotal);return total===null?null:Math.round(total*100);}
+ const price=recordNumber(recordCell(d,r,'unit_price')),qty=recordNumber(recordCell(d,r,'quantity'));
+ return price===null||qty===null?null:Math.round(price*qty*100);
+}
 export function recordTotals(d:QuoteRecordData){const amounts=d.rows.map(r=>recordAmount(d,r)),subtotal=amounts.reduce<number>((a,v)=>a+(v??0),0);return {subtotal,total:subtotal+Math.round(subtotal*d.tax_bp/10000)+(d.shipping??0),missing:amounts.filter(a=>a===null).length,priced:amounts.filter(a=>a!==null).length};}
 export function validateQuoteRecord(v:any,allowMissingSupplier=false):QuoteRecordData{
  const fail=(m:string):never=>{throw Error(m);};const text=(s:any,max:number,required=false)=>typeof s==='string'&&s.length<=max&&(!required||!!s.trim())?s.trim():fail('Revisa los textos de la cotización.');
@@ -22,3 +28,4 @@ export function validateQuoteRecord(v:any,allowMissingSupplier=false):QuoteRecor
  if(!Number.isInteger(data.tax_bp)||(data.shipping!==null&&!Number.isSafeInteger(data.shipping)))fail('Revisa los decimales de impuestos y envío.');
  if(rows.some(r=>recordAmount(data,r)!==null&&!Number.isSafeInteger(recordAmount(data,r))))fail('Importe fuera de rango.');return data;
 }
+

@@ -8,6 +8,10 @@ const before=structuredClone(data),model=quotePreviewModel(data);assert.equal(mo
 const partial=quotePreviewModel({...data,shipping:null,rows:[data.rows[0],{...data.rows[1],cells:['Servicio','1','','Color por definir']}]});assert.equal(partial.rows[1].amount,null);assert.equal(partial.partial,true);assert.equal(partial.total,6960);assert.equal(partial.warnings.length,2);
 const amountData={...data,columns:data.columns.map(c=>c.id==='p'?{...c,role:'amount'}:c)};const derived=quotePreviewModel(amountData);assert.equal(derived.rows[0].amount,3000);assert.equal(derived.rows[0].unitPrice,1500);assert.equal(derived.rows[0].derived,true);assert.equal(derived.calculated,true);
 const mismatch=quotePreviewModel({...data,columns:[...data.columns,{id:'t',label:'Importe',role:'amount'}],rows:[{id:'1',cells:['Servicio','2','30','Mate','50']}]});assert.ok(mismatch.warnings.some(v=>v.includes('difiere')));assert.equal(mismatch.rows[0].amount,5000);
+const autoData={...data,columns:[...data.columns,{id:'total',label:'Importe total',role:'amount'}],rows:[{id:'1',cells:['Instalación','2','30','Mate','']},{id:'2',cells:['Servicio','1','15','Color por definir','20']}]};
+const autoPreview=quotePreviewModel(autoData);assert.equal(autoPreview.rows[0].amount,6000);assert.equal(autoPreview.rows[1].amount,2000);assert.equal(autoPreview.subtotal,8000);assert.equal(autoPreview.total,9280);assert.equal(autoPreview.partial,false);
+assert.equal(autoPreview.warnings.filter(v=>v.includes('difiere')).length,1);
+const updated=structuredClone(autoData);updated.rows[0].cells[1]='3';assert.equal(quotePreviewModel(updated).rows[0].amount,9000);assert.equal(updated.rows[0].cells[4],'');
 const file=new URL('./.quote-preview-test-'+process.pid+'.mjs',import.meta.url);
 try{writeFileSync(file,transpile(read('QuotePreview.tsx').replace("'./quote-preview-model'",JSON.stringify(modelUri))));const {QuoteDocument}=await import(file.href);const html=renderToStaticMarkup(React.createElement(QuoteDocument,{value:{data,storeName:'Tienda demo',revision:2,unsaved:true}}));assert.ok(html.includes('Proveedor demo'));assert.ok(html.includes('CAPTURA SIN GUARDAR'));assert.ok(html.includes('Mate'));assert.ok(html.includes('$87.00'));assert.ok(html.includes('Condiciones comerciales'));assert.ok(html.includes('Último guardado')===false);
 const escaped=renderToStaticMarkup(React.createElement(QuoteDocument,{value:{data:{...data,supplier:'<script>alert(1)</script>'},storeName:'Demo',unsaved:false}}));assert.ok(escaped.includes('&lt;script&gt;'));assert.ok(!escaped.includes('<script>'));
@@ -15,3 +19,4 @@ const noPrices=renderToStaticMarkup(React.createElement(QuoteDocument,{value:{da
 const request=renderToStaticMarkup(React.createElement(QuoteDocument,{value:{data:{...data,type:'request',supplier:''},storeName:'Demo',unsaved:true}}));assert.ok(request.includes('SOLICITUD'));assert.ok(!request.includes('class="qp-totals"'));
 }finally{unlinkSync(file);}
 console.log('Quote preview totals, partial amounts, derived prices, original attributes, draft status, safe HTML rendering and request formatting passed.');
+
