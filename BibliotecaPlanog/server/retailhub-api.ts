@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitors-1';
+const API_BUILD = 'exhibitors-2';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -344,6 +344,49 @@ export function zoneFromDrag(a:{x:number;y:number},b:{x:number;y:number}):Exhibi
  const clamp=(n:number)=>Math.min(1,Math.max(0,n)),x=Math.min(clamp(a.x),clamp(b.x)),y=Math.min(clamp(a.y),clamp(b.y)),w=Math.abs(clamp(a.x)-clamp(b.x)),h=Math.abs(clamp(a.y)-clamp(b.y));return w<.005||h<.005?null:{x,y,w,h};
 }
 
+// Public Truper HTML only. This module is copied into the standalone Edge Function.
+export type TruperProduct={code:string;description:string;key:string;brand:string;dimensions:string;installation:string;source:string;specs:{label:string;value:string}[]};
+export type TruperResult={product:TruperProduct;imageDataUrl:string;drawingDataUrl:string;warnings:string[]};
+export function truperText(s:string){const entities:Record<string,string>={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' ',aacute:'á',eacute:'é',iacute:'í',oacute:'ó',uacute:'ú',ntilde:'ñ',uuml:'ü',Aacute:'Á',Eacute:'É',Iacute:'Í',Oacute:'Ó',Uacute:'Ú',Ntilde:'Ñ',Uuml:'Ü',deg:'°',times:'×',Oslash:'Ø',oslash:'ø'};return s.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>[\s\S]*?<\/style\s*>|<!--[\s\S]*?-->/gi,' ').replace(/<[^>]*>/g,' ').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,(all,n)=>{if(n[0]==='#'){const code=n[1].toLowerCase()==='x'?parseInt(n.slice(2),16):Number(n.slice(1));return code>0&&code<=0x10ffff?String.fromCodePoint(code):all;}return entities[n]??all;}).replace(/\s+/g,' ').trim();}
+export function truperURL(value:string,kind:'page'|'image'='page'){let u:URL;try{u=new URL(value);}catch{throw Error('Usa una ficha HTML oficial de Truper.');}if(u.protocol!=='https:'||!['www.truper.com','truper.com'].includes(u.hostname)||u.username||u.password||u.port||!(kind==='image'?/^\/media\/import\/imagenes\/[A-Za-z0-9_%+().-]+\.(?:jpg|png|webp)$/i.test(u.pathname):u.pathname.startsWith('/ficha_tecnica/')))throw Error('Solo se permiten fichas e imágenes oficiales de Truper.');if(kind==='image'&&(/%2f|%5c|%2e/i.test(u.pathname)||u.search))throw Error('Imagen oficial no válida.');u.hash='';return u.href;}
+export function parseTruperProduct(html:string,code:string,source:string){
+ if(!/^\d{4,8}$/.test(code))throw Error('Escribe un código numérico de Truper.');
+ const safe=html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>|<!--[\s\S]*?-->/gi,'');
+ const actual=truperText(safe.match(/C(?:o|ó|&oacute;|&#243;)digo\s*:\s*(?:<[^>]+>\s*){0,3}(\d{4,8})\b/i)?.[1]||'');
+ if(actual!==code)throw Error('La ficha encontrada no corresponde al código solicitado. No se reemplazaron sus datos.');
+ const key=truperText(safe.match(/Clave\s*:\s*(?:<[^>]+>\s*){1,3}([^<]+)</i)?.[1]||'').slice(0,100);
+ const description=truperText(safe.match(/class=["'][^"']*tamanio_text_titulo[^"']*["'][^>]*>\s*<p\b[^>]*>([\s\S]*?)<\/p>/i)?.[1]||safe.match(/class=["'][^"']*ft-product-name[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1]||safe.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1]||'').slice(0,2000);
+ if(!key||!description||/^ficha\s+t[eé]cnica$/i.test(description))throw Error('Truper no devolvió una ficha completa. Puedes pegar su enlace HTML oficial e intentar de nuevo.');
+ const section=safe.match(/\bid=["'](?:fill-tabpanel-1|espec)["'][^>]*>([\s\S]*?)(?=\bid=["']fill-tabpanel-[023456789]["']|$)/i)?.[1]||'';
+ const specSection=/\bid=["']espec["']/i.test(safe)?section.slice(0,section.indexOf('</table>')+8):section;
+ const specs:{label:string;value:string}[]=[];for(const row of specSection.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)){const cells=[...row[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(c=>truperText(c[1]));if(cells.length===2&&cells.every(Boolean)&&!specs.some(s=>s.label===cells[0]&&s.value===cells[1])&&specs.length<38)specs.push({label:cells[0].slice(0,150),value:cells[1].slice(0,1000)});}
+ const dimensions=specs.filter(s=>/dimensi[oó]n|di[aá]metro|altura|\balto\b|ancho|largo|fondo|medida|longitud|profundidad|espesor/i.test(s.label)&&!/empaque|caja|m[aá]ster|inner|pallet|corte|empotramiento/i.test(s.label)).map(s=>s.label+': '+s.value).join('\n').slice(0,2000);
+ const installation=specs.filter(s=>/corte|empotramiento|instalaci[oó]n|montaje/i.test(s.label)).map(s=>s.label+': '+s.value).join('\n').slice(0,2000);
+ const brandName=safe.match(/BibliotecaMarcas\/svg\/([a-z0-9-]+)\.svg/i)?.[1];const brand=brandName?brandName.replace(/-/g,' ').toUpperCase().slice(0,100):'';
+ const names=[...safe.matchAll(/<img\b[^>]*\bsrc=["'][^"']*media\/import\/imagenes\/([^"'/?]+)\.(jpg|png|webp)["']/gi)].map(m=>({name:m[1],ext:m[2]}));
+ const main=names.find(n=>n.name.toUpperCase()===key.toUpperCase()),drawing=names.find(n=>n.name.toUpperCase().startsWith(key.toUpperCase()+'+D')&&/\+D\d+$/i.test(n.name));
+ const image=(n:typeof main)=>n?truperURL('https://www.truper.com/media/import/imagenes/'+n.name+'.'+n.ext,'image'):'';
+ return {product:{code,description,key,brand,dimensions,installation,source:truperURL(source),specs},imageURL:image(main),drawingURL:image(drawing)};
+}
+export async function fetchTruperProduct(code:string,source=''):Promise<TruperResult>{
+ if(!/^\d{4,8}$/.test(code))throw Error('Escribe un código numérico de Truper.');
+ const signal=AbortSignal.timeout(25000);let cookies='';
+ async function request(url:string,init:RequestInit={},kind:'page'|'image'='page'){let target=truperURL(url,kind);for(let i=0;i<4;i++){const r=await fetch(target,{...init,redirect:'manual',signal,headers:{Accept:kind==='image'?'image/jpeg,image/png,image/webp':'text/html',...(cookies?{Cookie:cookies}:{}),...init.headers}});const set=r.headers.getSetCookie?.()||[];if(set.length)cookies=set.map(c=>c.split(';')[0]).join('; ');if(r.status>=300&&r.status<400){const location=r.headers.get('location');await r.body?.cancel();if(!location)throw Error('Truper devolvió una redirección incompleta.');target=truperURL(new URL(location,target).href,kind);if(r.status===301||r.status===302||r.status===303)init={};continue;}if(!r.ok){await r.body?.cancel();throw Error('Truper no permitió consultar la ficha en este momento. Intenta después o captura los datos manualmente.');}return {r,url:target};}throw Error('No se pudo abrir la ficha oficial.');}
+ async function bytes(r:Response,max:number){if(Number(r.headers.get('content-length'))>max){await r.body?.cancel();throw Error('La respuesta de Truper es demasiado grande.');}const reader=r.body?.getReader();if(!reader)throw Error('Truper devolvió una respuesta vacía.');const parts:Uint8Array[]=[];let size=0;while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>max){await reader.cancel();throw Error('La respuesta de Truper es demasiado grande.');}parts.push(value);}const out=new Uint8Array(size);let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;}
+ async function page(url:string,init?:RequestInit){const {r,url:final}=await request(url,init);if(!/text\/html/i.test(r.headers.get('content-type')||'')){await r.body?.cancel();throw Error('Pega el enlace de la ficha HTML de Truper; el PDF no se importa automáticamente.');}return {html:new TextDecoder().decode(await bytes(r,2000000)),url:final};}
+ const entry=source&&/\/ficha_tecnica\/[^?]+\.html(?:\?|$)/.test(source)?truperURL(source):'https://www.truper.com/ficha_tecnica/Luminario-cuadrado-satin-spot-fijo-lampara-no-incluida.html?code=45568';
+ let doc=await page(entry),parsed:ReturnType<typeof parseTruperProduct>|null=null;
+ try{parsed=parseTruperProduct(doc.html,code,doc.url);}catch{}
+ if(!parsed){const token=doc.html.match(/<input\b(?=[^>]*\bname=["']_token["'])(?=[^>]*\bvalue=["']([^"']+)["'])[^>]*>/i)?.[1];if(!token)throw Error('No se pudo iniciar la búsqueda oficial. Pega el enlace HTML del código e intenta de nuevo.');const form=new URLSearchParams({buscador:code,_token:token});doc=await page('https://www.truper.com/ficha_tecnica/search',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Referer:doc.url},body:form.toString()});try{parsed=parseTruperProduct(doc.html,code,doc.url);}catch{}
+  if(!parsed){const links=[...doc.html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];const match=links.find(m=>{try{const u=new URL(truperText(m[1]),doc.url);truperURL(u.href);return /\.html$/i.test(u.pathname)&&(u.searchParams.get('code')===code||new RegExp('\\b'+code+'\\b').test(truperText(m[2])));}catch{return false;}});if(!match)throw Error('No se encontró una ficha oficial para ese código. Revisa el código o pega su enlace HTML de Truper.');doc=await page(new URL(truperText(match[1]),doc.url).href);parsed=parseTruperProduct(doc.html,code,doc.url);}
+ }
+ const warnings:string[]=[];
+ async function image(url:string){if(!url)return '';try{const {r}=await request(url,{},'image'),b=await bytes(r,4000000);const mime=b[0]===255&&b[1]===216&&b[2]===255?'image/jpeg':[137,80,78,71,13,10,26,10].every((v,i)=>b[i]===v)?'image/png':new TextDecoder().decode(b.slice(0,4))==='RIFF'&&new TextDecoder().decode(b.slice(8,12))==='WEBP'?'image/webp':'';if(!mime)throw Error('No es una imagen compatible.');let binary='';for(let i=0;i<b.length;i+=32768)binary+=String.fromCharCode(...b.subarray(i,i+32768));return 'data:'+mime+';base64,'+btoa(binary);}catch{warnings.push('No se pudo descargar una imagen oficial. Puedes incorporarla manualmente.');return '';}}
+ const imageDataUrl=await image(parsed.imageURL),drawingDataUrl=await image(parsed.drawingURL);
+ if(!parsed.product.dimensions)warnings.push('La ficha no publica dimensiones físicas identificables. Quedan pendientes.');if(!parsed.product.installation)warnings.push('La ficha no publica una medida de corte identificable. No usar la medida exterior como perforación.');if(!imageDataUrl)warnings.push('Fotografía de producto pendiente.');if(!drawingDataUrl)warnings.push('Sin imagen de dimensiones disponible; se mostrará la ficha visual con los datos publicados.');
+ return {product:parsed.product,imageDataUrl,drawingDataUrl,warnings};
+}
+
 function exhibitStoreIds(u:any):string[]{return Array.isArray(u?.app_metadata?.exhibit_store_ids)?[...new Set((u.app_metadata.exhibit_store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
 async function exhibitRoot(store:any){const folder=await liveFolder(store);return folder.path_display+'/exhibidores';}
 async function ensureExhibitFolders(root:string){for(const path of [root,root+'/registros',root+'/imagenes']){try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const f=await dbx('files/get_metadata',{path});if(f['.tag']!=='folder')throw new PortalError(409,'Hay un archivo ocupando la carpeta de exhibidores.');}}}
@@ -362,6 +405,7 @@ async function exhibitWrite(path:string,bytes:Uint8Array,revision?:string){
 async function exhibitRoutes(r:Request,p:string[],user:any){
  const method=r.method,query=new URL(r.url).searchParams;
  const store=await requireStore(query.get('store'),user,'exhibitors'),root=await exhibitRoot(store),admin=user.app_metadata.role==='admin';
+ if(p.length===2&&p[1]==='truper'&&method==='POST'){membership(user,true);const b=await bodyJSON(r);if(typeof b.code!=='string'||(b.source!==undefined&&typeof b.source!=='string')||String(b.source||'').length>1500)throw new PortalError(400,'Revisa el código y la ficha oficial.');try{return json(await fetchTruperProduct(b.code.trim(),b.source?.trim()||''));}catch(e){throw new PortalError(422,(e as Error).name==='TimeoutError'?'Truper tardó demasiado en responder. Intenta de nuevo más tarde.':(e as Error).message);}}
  if(p.length===1&&method==='GET'){
   let listing:any;const cursor=query.get('cursor');
   try{if(cursor){const t=await unseal('exhibit-list',cursor);if(t.uid!==user.id||t.store!==store.id||t.expires<Date.now())throw new PortalError(400,'Actualiza la lista de exhibidores.');listing=await dbx('files/list_folder/continue',{cursor:t.cursor});}else listing=await dbx('files/list_folder',{path:root+'/registros',limit:100,recursive:false});}catch(e){if(e instanceof DropboxNotFound)return json({exhibitors:[],next:null});throw e;}
@@ -401,7 +445,7 @@ async function handleRequest(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;

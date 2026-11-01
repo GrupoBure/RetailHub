@@ -40,6 +40,19 @@ Las fotografías y fichas son copias guardadas: cambiar un artículo en Truper n
 
 ## Comprobar la activación
 
-La respuesta de estado de `retailhub-api/status` debe mostrar `build: "exhibitors-1"` y `features.exhibitors: true`. Si sigue apareciendo la pantalla de activación, revisa que se haya actualizado y desplegado la función del proyecto correcto y vuelve a cargar el portal.
+La respuesta de estado de `retailhub-api/status` debe mostrar `build: "exhibitors-2"` y `features.exhibitors: true`, además de `features.exhibitTruper: true`. Si sigue apareciendo la pantalla de activación, revisa que se haya actualizado y desplegado la función del proyecto correcto y vuelve a cargar el portal.
 
 Validación previa: compilación de producción; pruebas de permisos por tienda, borradores, lectura de imágenes, conflicto entre versiones, restricción de escritura y eliminación; regresiones de sesión y cotizaciones. Las pruebas automatizadas usan servicios simulados. Tras desplegar la función, comprueba una carga y su lectura real desde Dropbox antes de dar acceso al proveedor.
+
+## Consultar un código nuevo en Truper
+
+Esta función también requiere desplegar el código actualizado de `retailhub-api` (versión `exhibitors-2`). Los secretos y la conexión de Dropbox existentes se conservan.
+
+1. Carga el paquete o abre un exhibidor y pulsa **Editar exhibidor**.
+2. Selecciona un artículo en el listado o en la fotografía.
+3. Edita **Código del artículo**. Al cambiarlo se vacían los datos técnicos y las imágenes anteriores para evitar asociarlos al código equivocado; la ubicación se conserva.
+4. Pulsa **Traer datos de Truper**. La consulta es del código exacto; las medidas y características solo se toman de la ficha oficial. Si tienes el enlace HTML, puedes pegarlo en el campo de ficha oficial antes de consultar.
+5. Revisa la vista previa y pulsa **Usar estos datos**. Las fotos encontradas se incorporan a Dropbox. Si falta alguna medida o imagen, se indica expresamente; los cortes nunca se deducen de las dimensiones exteriores.
+6. Pulsa **Guardar exhibidor** para conservar los cambios. También puedes capturar o corregir los datos manualmente.
+
+La consulta depende de que Truper permita el acceso a su sitio. Ante un bloqueo, una ficha incompleta o un código distinto, no se aplican los datos. No se importan automáticamente los PDF; usa el enlace HTML de la ficha. Las tablas e ilustraciones pueden tener diferencias: revisa ambas antes de fabricar.
