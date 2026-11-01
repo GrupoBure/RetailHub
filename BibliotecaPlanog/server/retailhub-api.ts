@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitors-4';
+const API_BUILD = 'exhibitors-5';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -426,9 +426,9 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
   return json({exhibitors:items,next:listing.has_more?await seal('exhibit-list',{uid:user.id,store:store.id,cursor:listing.cursor,expires:Date.now()+900000}):null});
  }
  if(p.length===2&&p[1]==='assets'&&method==='POST'){
-  membership(user,true);const b=await bodyJSON(r,12000000);const data=b.dataUrl;
-  if(typeof data!=='string'||data.length>11500000||!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(data))throw new PortalError(400,'Selecciona una imagen JPG, PNG o WebP de hasta 8 MB.');
-  const split=data.indexOf(','),mime=data.slice(5,data.indexOf(';')),binary=atob(data.slice(split+1));if(binary.length>8000000)throw new PortalError(413,'La imagen supera 8 MB.');const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
+  membership(user,true);const b=await bodyJSON(r,14000000);const data=b.dataUrl;
+  if(typeof data!=='string'||data.length>13500000||!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(data))throw new PortalError(400,'Selecciona una imagen JPG, PNG o WebP de hasta 10 MB.');
+  const split=data.indexOf(','),mime=data.slice(5,data.indexOf(';')),binary=atob(data.slice(split+1));if(binary.length>10000000)throw new PortalError(413,'La imagen supera 10 MB.');const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
   const good=mime==='image/jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:mime==='image/png'?[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v):new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP';if(!good)throw new PortalError(400,'El contenido no corresponde al formato de imagen.');
   await ensureExhibitFolders(root);const name=crypto.randomUUID()+'.'+(mime==='image/jpeg'?'jpg':mime==='image/png'?'png':'webp');await exhibitWrite(root+'/imagenes/'+name,bytes);return json({asset:name},201);
  }
@@ -441,8 +441,8 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
  if(p.length===2&&method==='GET')return json({record:rec});
  if(p.length===4&&p[2]==='assets'&&method==='GET'){
   if(!exhibitAssetName(p[3])||!exhibitAssets(rec.data).includes(p[3]))throw new PortalError(404,'Imagen no disponible.');
-  const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+p[3]});if(f['.tag']!=='file'||f.size>8000000||String(f.path_lower)!==(root+'/imagenes/'+p[3]).toLowerCase())throw new PortalError(404,'Imagen no disponible.');
-  const bytes=await bounded(await content('files/download',{path:f.id}),8000000);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));const mime=p[3].endsWith('.jpg')?'image/jpeg':p[3].endsWith('.png')?'image/png':'image/webp';return json({dataUrl:'data:'+mime+';base64,'+btoa(binary)});
+  const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+p[3]});if(f['.tag']!=='file'||f.size>10000000||String(f.path_lower)!==(root+'/imagenes/'+p[3]).toLowerCase())throw new PortalError(404,'Imagen no disponible.');
+  const bytes=await bounded(await content('files/download',{path:f.id}),10000000);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));const mime=p[3].endsWith('.jpg')?'image/jpeg':p[3].endsWith('.png')?'image/png':'image/webp';return json({dataUrl:'data:'+mime+';base64,'+btoa(binary)});
  }
  if(p.length===2&&(method==='PATCH'||method==='DELETE')){
   membership(user,true);const b=await bodyJSON(r,800000);if(b.revision!==rec.revision)throw new PortalError(409,'El exhibidor cambió. Vuelve a abrirlo antes de guardar.');

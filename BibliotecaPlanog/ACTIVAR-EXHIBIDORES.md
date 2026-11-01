@@ -40,7 +40,7 @@ Las fotografías y fichas son copias guardadas: cambiar un artículo en Truper n
 
 ## Comprobar la activación
 
-La respuesta de estado de `retailhub-api/status` debe mostrar `build: "exhibitors-4"` y `features.exhibitors: true`, además de `features.exhibitTruper: true`. Si sigue apareciendo la pantalla de activación, revisa que se haya actualizado y desplegado la función del proyecto correcto y vuelve a cargar el portal.
+La respuesta de estado de `retailhub-api/status` debe mostrar `build: "exhibitors-5"` y `features.exhibitors: true`, además de `features.exhibitTruper: true`. Si sigue apareciendo la pantalla de activación, revisa que se haya actualizado y desplegado la función del proyecto correcto y vuelve a cargar el portal.
 
 Validación previa: compilación de producción; pruebas de permisos por tienda, borradores, lectura de imágenes, conflicto entre versiones, restricción de escritura y eliminación; regresiones de sesión y cotizaciones. Las pruebas automatizadas usan servicios simulados. Tras desplegar la función, comprueba una carga y su lectura real desde Dropbox antes de dar acceso al proveedor.
 
@@ -66,3 +66,7 @@ Pega la liga completa en **Código del artículo** para extraer su código y enl
 El buscador oficial de Truper devuelve filas `tr data-href`, con destinos sin `.html` y el parámetro `codigo`. El lector reconoce este formato y las variantes con enlaces convencionales. Para un artículo nuevo basta escribir el código y pulsar **Traer datos de Truper**: el servidor realiza la búsqueda, abre la fila correspondiente y verifica el código de la ficha antes de mostrar sus datos. La liga manual es opcional. Esta corrección requiere desplegar el archivo completo actualizado de `retailhub-api`; no requiere SQL ni cargar nuevamente los exhibidores.
 
 Se verificó en el buscador oficial que introducir `46625` devuelve la fila correcta y que su destino abre la ficha `46625 / EMP-108S`. La extracción y la secuencia de solicitudes tienen una prueba de regresión para esa estructura. La ejecución de la función desplegada de Supabase debe comprobarse después de actualizarla; si el proveedor rechaza el acceso, se informa sin sustituir datos.
+
+### Imágenes de hasta 10 MB (exhibitors-5)
+
+Fotografías de referencia, planos y fotos o dibujos de artículos admiten hasta 10,000,000 bytes por archivo (10 MB). Los archivos se conservan en Dropbox. El límite se verifica tanto al subir como al leer, con el margen correspondiente para la transferencia codificada. Despliega el código completo actualizado de `retailhub-api` y recarga el portal para activar el nuevo límite. No se requiere SQL ni volver a cargar los exhibidores existentes.
