@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitors-5';
+const API_BUILD = 'exhibitors-6';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -400,6 +400,30 @@ export async function fetchTruperProduct(code:string,source=''):Promise<TruperRe
  return {product:parsed.product,imageDataUrl,drawingDataUrl,warnings};
 }
 
+// Shared by browser uploads and the standalone Edge Function.
+export const EXHIBIT_IMAGE_LIMIT=10000000;
+export class ExhibitImageError extends Error{constructor(message:string,public status=400){super(message);}}
+export function decodeExhibitImage(dataUrl:string){
+ if(typeof dataUrl!=='string')throw new ExhibitImageError('Selecciona una imagen JPG, PNG o WebP.');
+ const header=dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,/);if(!header)throw new ExhibitImageError('Selecciona una imagen JPG, PNG o WebP.');
+ const encoded=dataUrl.slice(header[0].length);if(encoded.length>Math.ceil(EXHIBIT_IMAGE_LIMIT/3)*4)throw new ExhibitImageError('La imagen supera 10 MB.',413);
+ let binary:string;try{binary=atob(encoded);}catch{throw new ExhibitImageError('No se pudo leer el contenido de la imagen.');}
+ if(binary.length>EXHIBIT_IMAGE_LIMIT)throw new ExhibitImageError('La imagen supera 10 MB.',413);
+ // Do not use Uint8Array.from(string, callback): it creates a large intermediate list.
+ const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+ return {mime:header[1],bytes};
+}
+export function checkExhibitImage(mime:string,bytes:Uint8Array){
+ if(bytes.length>EXHIBIT_IMAGE_LIMIT)throw new ExhibitImageError('La imagen supera 10 MB.',413);
+ const good=mime==='image/jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:mime==='image/png'?[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v):mime==='image/webp'&&new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP';
+ if(!good)throw new ExhibitImageError('El contenido no corresponde al formato de imagen.');
+}
+export function exhibitImageRequest(dataUrl:string,binary:boolean,original?:Blob):RequestInit{
+ if(!binary)return {method:'POST',body:JSON.stringify({dataUrl})};
+ if(original){if(original.size>EXHIBIT_IMAGE_LIMIT)throw new ExhibitImageError('La imagen supera 10 MB.',413);if(!/^image\/(jpeg|png|webp)$/.test(original.type))throw new ExhibitImageError('Selecciona una imagen JPG, PNG o WebP.');return {method:'POST',headers:{'Content-Type':original.type},body:original};}
+ const {mime,bytes}=decodeExhibitImage(dataUrl);checkExhibitImage(mime,bytes);return {method:'POST',headers:{'Content-Type':mime},body:new Blob([bytes],{type:mime})};
+}
+
 function exhibitStoreIds(u:any):string[]{return Array.isArray(u?.app_metadata?.exhibit_store_ids)?[...new Set((u.app_metadata.exhibit_store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
 async function exhibitRoot(store:any){const folder=await liveFolder(store);return folder.path_display+'/exhibidores';}
 async function ensureExhibitFolders(root:string){for(const path of [root,root+'/registros',root+'/imagenes']){try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const f=await dbx('files/get_metadata',{path});if(f['.tag']!=='folder')throw new PortalError(409,'Hay un archivo ocupando la carpeta de exhibidores.');}}}
@@ -426,10 +450,8 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
   return json({exhibitors:items,next:listing.has_more?await seal('exhibit-list',{uid:user.id,store:store.id,cursor:listing.cursor,expires:Date.now()+900000}):null});
  }
  if(p.length===2&&p[1]==='assets'&&method==='POST'){
-  membership(user,true);const b=await bodyJSON(r,14000000);const data=b.dataUrl;
-  if(typeof data!=='string'||data.length>13500000||!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(data))throw new PortalError(400,'Selecciona una imagen JPG, PNG o WebP de hasta 10 MB.');
-  const split=data.indexOf(','),mime=data.slice(5,data.indexOf(';')),binary=atob(data.slice(split+1));if(binary.length>10000000)throw new PortalError(413,'La imagen supera 10 MB.');const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
-  const good=mime==='image/jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:mime==='image/png'?[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v):new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP';if(!good)throw new PortalError(400,'El contenido no corresponde al formato de imagen.');
+  membership(user,true);let mime:string,bytes:Uint8Array;const type=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  try{if(/^image\/(jpeg|png|webp)$/.test(type)){mime=type;bytes=await bounded(r,EXHIBIT_IMAGE_LIMIT);}else if(type==='application/json'||!type){const b=await bodyJSON(r,14000000);({mime,bytes}=decodeExhibitImage(b.dataUrl));}else throw new ExhibitImageError('Selecciona una imagen JPG, PNG o WebP.',415);checkExhibitImage(mime,bytes);}catch(e){if(e instanceof ExhibitImageError)throw new PortalError(e.status,e.message);throw e;}
   await ensureExhibitFolders(root);const name=crypto.randomUUID()+'.'+(mime==='image/jpeg'?'jpg':mime==='image/png'?'png':'webp');await exhibitWrite(root+'/imagenes/'+name,bytes);return json({asset:name},201);
  }
  if(p.length===1&&method==='POST'){
@@ -458,7 +480,7 @@ async function handleRequest(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
