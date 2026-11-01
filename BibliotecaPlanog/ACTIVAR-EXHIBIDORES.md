@@ -40,13 +40,13 @@ Las fotografías y fichas son copias guardadas: cambiar un artículo en Truper n
 
 ## Comprobar la activación
 
-La respuesta de estado de `retailhub-api/status` debe mostrar `build: "exhibitors-3"` y `features.exhibitors: true`, además de `features.exhibitTruper: true`. Si sigue apareciendo la pantalla de activación, revisa que se haya actualizado y desplegado la función del proyecto correcto y vuelve a cargar el portal.
+La respuesta de estado de `retailhub-api/status` debe mostrar `build: "exhibitors-4"` y `features.exhibitors: true`, además de `features.exhibitTruper: true`. Si sigue apareciendo la pantalla de activación, revisa que se haya actualizado y desplegado la función del proyecto correcto y vuelve a cargar el portal.
 
 Validación previa: compilación de producción; pruebas de permisos por tienda, borradores, lectura de imágenes, conflicto entre versiones, restricción de escritura y eliminación; regresiones de sesión y cotizaciones. Las pruebas automatizadas usan servicios simulados. Tras desplegar la función, comprueba una carga y su lectura real desde Dropbox antes de dar acceso al proveedor.
 
 ## Consultar un código nuevo en Truper
 
-Esta función también requiere desplegar el código actualizado de `retailhub-api` (versión `exhibitors-3`). Los secretos y la conexión de Dropbox existentes se conservan.
+Esta función también requiere desplegar el código actualizado de `retailhub-api` (versión `exhibitors-4`). Los secretos y la conexión de Dropbox existentes se conservan.
 
 1. Carga el paquete o abre un exhibidor y pulsa **Editar exhibidor**.
 2. Selecciona un artículo en el listado o en la fotografía.
@@ -60,3 +60,9 @@ La consulta depende de que Truper permita el acceso a su sitio. Ante un bloqueo,
 ### Si la búsqueda por código no resuelve una ficha existente
 
 Pega la liga completa en **Código del artículo** para extraer su código y enlace, o en **Ficha oficial de Truper (https)**, ahora junto al botón de consulta. Al pulsar **Traer datos de Truper**, una liga proporcionada se abre directamente sin depender del buscador. El código de la página debe coincidir exactamente con el artículo. La búsqueda automática también revisa enlaces de resultados que solo muestran la descripción; siempre valida el código dentro de la ficha antes de aplicarla. Si Truper rechaza el acceso al servidor, la liga no evita ese rechazo y se muestra el aviso correspondiente.
+
+### Corrección de búsqueda automática por código (exhibitors-4)
+
+El buscador oficial de Truper devuelve filas `tr data-href`, con destinos sin `.html` y el parámetro `codigo`. El lector reconoce este formato y las variantes con enlaces convencionales. Para un artículo nuevo basta escribir el código y pulsar **Traer datos de Truper**: el servidor realiza la búsqueda, abre la fila correspondiente y verifica el código de la ficha antes de mostrar sus datos. La liga manual es opcional. Esta corrección requiere desplegar el archivo completo actualizado de `retailhub-api`; no requiere SQL ni cargar nuevamente los exhibidores.
+
+Se verificó en el buscador oficial que introducir `46625` devuelve la fila correcta y que su destino abre la ficha `46625 / EMP-108S`. La extracción y la secuencia de solicitudes tienen una prueba de regresión para esa estructura. La ejecución de la función desplegada de Supabase debe comprobarse después de actualizarla; si el proveedor rechaza el acceso, se informa sin sustituir datos.
