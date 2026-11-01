@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitors-2';
+const API_BUILD = 'exhibitors-3';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -368,6 +368,10 @@ export function parseTruperProduct(html:string,code:string,source:string){
  const image=(n:typeof main)=>n?truperURL('https://www.truper.com/media/import/imagenes/'+n.name+'.'+n.ext,'image'):'';
  return {product:{code,description,key,brand,dimensions,installation,source:truperURL(source),specs},imageURL:image(main),drawingURL:image(drawing)};
 }
+export function truperSearchLinks(html:string,code:string,base:string){
+ const links:{url:string;score:number}[]=[];for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)){try{const href=truperText(m[1]).replace(/^__DIR__\/(?:\.\.\/)+/,'https://www.truper.com/'),u=new URL(href,base);truperURL(u.href);if(!/\.html$/i.test(u.pathname))continue;const explicit=u.searchParams.get('code')||u.searchParams.get('codigo');if(explicit&&explicit!==code)continue;const nearby=html.slice(Math.max(0,(m.index||0)-250),(m.index||0)+m[0].length+250);const score=explicit===code?100:new RegExp('\\b'+code+'\\b').test(truperText(m[2]))?80:new RegExp('\\b'+code+'\\b').test(nearby)?60:0;if(!links.some(l=>l.url===u.href))links.push({url:u.href,score});}catch{}}
+ return links.sort((a,b)=>b.score-a.score).slice(0,3).map(l=>l.url);
+}
 export async function fetchTruperProduct(code:string,source=''):Promise<TruperResult>{
  if(!/^\d{4,8}$/.test(code))throw Error('Escribe un código numérico de Truper.');
  const signal=AbortSignal.timeout(25000);let cookies='';
@@ -376,9 +380,12 @@ export async function fetchTruperProduct(code:string,source=''):Promise<TruperRe
  async function page(url:string,init?:RequestInit){const {r,url:final}=await request(url,init);if(!/text\/html/i.test(r.headers.get('content-type')||'')){await r.body?.cancel();throw Error('Pega el enlace de la ficha HTML de Truper; el PDF no se importa automáticamente.');}return {html:new TextDecoder().decode(await bytes(r,2000000)),url:final};}
  const entry=source&&/\/ficha_tecnica\/[^?]+\.html(?:\?|$)/.test(source)?truperURL(source):'https://www.truper.com/ficha_tecnica/Luminario-cuadrado-satin-spot-fijo-lampara-no-incluida.html?code=45568';
  let doc=await page(entry),parsed:ReturnType<typeof parseTruperProduct>|null=null;
- try{parsed=parseTruperProduct(doc.html,code,doc.url);}catch{}
+ const direct=!!source&&/\/ficha_tecnica\/[^?]+\.html(?:\?|$)/.test(source);
+ if(direct){const linked=new URL(entry).searchParams.get('code')||new URL(entry).searchParams.get('codigo');if(linked&&linked!==code)throw Error('La liga indica el código '+linked+', pero el artículo tiene '+code+'. Corrige uno de los dos.');parsed=parseTruperProduct(doc.html,code,doc.url);}
+ else try{parsed=parseTruperProduct(doc.html,code,doc.url);}catch{}
  if(!parsed){const token=doc.html.match(/<input\b(?=[^>]*\bname=["']_token["'])(?=[^>]*\bvalue=["']([^"']+)["'])[^>]*>/i)?.[1];if(!token)throw Error('No se pudo iniciar la búsqueda oficial. Pega el enlace HTML del código e intenta de nuevo.');const form=new URLSearchParams({buscador:code,_token:token});doc=await page('https://www.truper.com/ficha_tecnica/search',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Referer:doc.url},body:form.toString()});try{parsed=parseTruperProduct(doc.html,code,doc.url);}catch{}
-  if(!parsed){const links=[...doc.html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];const match=links.find(m=>{try{const u=new URL(truperText(m[1]),doc.url);truperURL(u.href);return /\.html$/i.test(u.pathname)&&(u.searchParams.get('code')===code||new RegExp('\\b'+code+'\\b').test(truperText(m[2])));}catch{return false;}});if(!match)throw Error('No se encontró una ficha oficial para ese código. Revisa el código o pega su enlace HTML de Truper.');doc=await page(new URL(truperText(match[1]),doc.url).href);parsed=parseTruperProduct(doc.html,code,doc.url);}
+  if(!parsed){const candidates=truperSearchLinks(doc.html,code,doc.url);for(const link of candidates){const candidate=await page(link);try{parsed=parseTruperProduct(candidate.html,code,candidate.url);break;}catch{}}if(!parsed)throw Error('La búsqueda no logró resolver una ficha para ese código. Esto no significa que no exista: pega su liga oficial para consultarla directamente.');}
+
  }
  const warnings:string[]=[];
  async function image(url:string){if(!url)return '';try{const {r}=await request(url,{},'image'),b=await bytes(r,4000000);const mime=b[0]===255&&b[1]===216&&b[2]===255?'image/jpeg':[137,80,78,71,13,10,26,10].every((v,i)=>b[i]===v)?'image/png':new TextDecoder().decode(b.slice(0,4))==='RIFF'&&new TextDecoder().decode(b.slice(8,12))==='WEBP'?'image/webp':'';if(!mime)throw Error('No es una imagen compatible.');let binary='';for(let i=0;i<b.length;i+=32768)binary+=String.fromCharCode(...b.subarray(i,i+32768));return 'data:'+mime+';base64,'+btoa(binary);}catch{warnings.push('No se pudo descargar una imagen oficial. Puedes incorporarla manualmente.');return '';}}
