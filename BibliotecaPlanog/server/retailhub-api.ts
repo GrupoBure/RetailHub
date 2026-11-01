@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'activity-2';
+const API_BUILD = 'exhibitors-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -39,7 +39,7 @@ function membership(u:any,admin=false){
  return u;
 }
 const sessionData=(d:any)=>({user:safeUser(d.user),session:{access_token:d.access_token,refresh_token:d.refresh_token,expires_in:d.expires_in}});
-async function bounded(r:Request,max:number){
+async function bounded(r:Request|Response,max:number){
  if(Number(r.headers.get('content-length'))>max)throw new PortalError(413,'El bloque es demasiado grande.');
  const reader=r.body?.getReader();if(!reader)return new Uint8Array();
  const parts:Uint8Array[]=[];let total=0;
@@ -68,7 +68,7 @@ export async function requireUser(r:Request,admin=false){
  const t=bearer(r);if(!t)throw new PortalError(401,'Inicia sesión para continuar.');
  return membership(await supa('/auth/v1/user',{},t),admin);
 }
-export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
+export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),exhibit_store_ids:exhibitStoreIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
 export function username(v:unknown){if(typeof v!=='string'||!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(v.toLowerCase()))throw new PortalError(400,'Usa de 3 a 40 letras sin acentos, números, puntos o guiones para el usuario.');return v.toLowerCase();}
 const email=(v:unknown)=>username(v)+'@usuarios.retailhub.invalid';
 export {email};
@@ -140,7 +140,7 @@ async function saveStoreFolder(e:any){
 }
 async function requireStore(id:unknown,user:any,scope='library'){
  if(!uuid(id))throw new PortalError(404,'Tienda no disponible.');
- if(user.app_metadata.role!=='admin'&&!(scope==='quotes'?quoteStoreIds(user):storeIds(user)).includes(id))throw new PortalError(404,'Tienda no disponible.');
+ if(user.app_metadata.role!=='admin'&&!(scope==='quotes'?quoteStoreIds(user):scope==='exhibitors'?exhibitStoreIds(user):storeIds(user)).includes(id))throw new PortalError(404,'Tienda no disponible.');
  const rows=await supa('/rest/v1/rh_stores?id=eq.'+id+'&select=id,name,dropbox_id,path_lower,enabled');const store=rows[0];
  if(!store||!store.enabled)throw new PortalError(404,'Tienda no disponible.');return store;
 }
@@ -315,12 +315,93 @@ export async function activityRecord(token:string,user:any,kind:string){
  try{const payload=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!uuid(payload.session_id)||payload.sub!==user.id)return false;
  const u=safeUser(user);await supa('/rest/v1/rpc/rh_activity_record',{method:'POST',body:JSON.stringify({p_user:user.id,p_session:payload.session_id,p_name:String(u.name||'').slice(0,100),p_username:String(u.username||'').slice(0,100),p_kind:kind})},undefined,4000);return true;}catch{return false;}
 }
+// Shared exhibitor validation. Keep the server copy identical.
+export type ExhibitZone={x:number;y:number;w:number;h:number};
+export type ExhibitProduct={id:string;code:string;description:string;key:string;brand:string;dimensions:string;installation:string;source:string;image:string;drawing:string;specs:{label:string;value:string}[];zone:ExhibitZone|null;placement:string};
+export type ExhibitData={name:string;project:string;notes:string;referenceNote:string;photo:string;plan:string;planNote:string;products:ExhibitProduct[];published:boolean};
+export type ExhibitRecord={id:string;revision:string;updatedAt:string;data:ExhibitData};
+export const EXHIBIT_REFERENCE='Fotografía de referencia. Las zonas indican dónde se propone colocar los artículos actuales. Fabricar conforme al plano y al listado de este proyecto.';
+export const exhibitAssetName=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9-]{36}\.(jpg|png|webp)$/.test(v);
+export function validateExhibit(v:any):ExhibitData{
+ const fail=(message:string):never=>{throw Error(message);};
+ const text=(s:unknown,max:number,required=false)=>typeof s==='string'&&s.length<=max&&(!required||!!s.trim())?s.trim():fail('Revisa los textos del exhibidor.');
+ const asset=(s:unknown)=>s===''?'':exhibitAssetName(s)?s:fail('Imagen no válida.');
+ const uuid=(s:unknown)=>typeof s==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(s)?s:fail('Identificador no válido.');
+ if(!v||!Array.isArray(v.products)||v.products.length>100||typeof v.published!=='boolean')fail('Usa hasta 100 artículos por exhibidor.');
+ const ids=new Set<string>();const products=v.products.map((p:any)=>{
+  const id=uuid(p.id);if(ids.has(id))fail('Hay artículos duplicados.');ids.add(id);
+  const source=text(p.source,1500);if(source){let u:URL;try{u=new URL(source);}catch{fail('Usa un enlace oficial de Truper.');}if(u!.protocol!=='https:'||!['www.truper.com','truper.com'].includes(u!.hostname)||u!.username||u!.password)fail('Usa un enlace oficial de Truper.');}
+  let zone:ExhibitZone|null=null;if(p.zone!==null){if(!p.zone||['x','y','w','h'].some(k=>typeof p.zone[k]!=='number'||!Number.isFinite(p.zone[k]))||p.zone.x<0||p.zone.y<0||p.zone.w<.005||p.zone.h<.005||p.zone.x+p.zone.w>1.000001||p.zone.y+p.zone.h>1.000001)fail('La zona debe quedar dentro de la foto.');zone={x:p.zone.x,y:p.zone.y,w:p.zone.w,h:p.zone.h};}
+  if(!Array.isArray(p.specs)||p.specs.length>40)fail('Revisa las características del artículo.');
+  return {id,code:text(p.code,40,true),description:text(p.description,2000,true),key:text(p.key,100),brand:text(p.brand,100),dimensions:text(p.dimensions,2000),installation:text(p.installation,2000),source,image:asset(p.image),drawing:asset(p.drawing),specs:p.specs.map((s:any)=>({label:text(s.label,150,true),value:text(s.value,1000,true)})),zone,placement:text(p.placement,1000)};
+ });
+ const data={name:text(v.name,160,true),project:text(v.project,160),notes:text(v.notes,6000),referenceNote:text(v.referenceNote,2000,true),photo:asset(v.photo),plan:asset(v.plan),planNote:text(v.planNote,2000),products,published:v.published};
+ if(data.published&&(!data.photo||!data.products.length))fail('Agrega una fotografía y artículos antes de publicar.');
+ return data;
+}
+export function exhibitAssets(d:ExhibitData){return [...new Set([d.photo,d.plan,...d.products.flatMap(p=>[p.image,p.drawing])].filter(Boolean))];}
+export function zoneFromDrag(a:{x:number;y:number},b:{x:number;y:number}):ExhibitZone|null{
+ const clamp=(n:number)=>Math.min(1,Math.max(0,n)),x=Math.min(clamp(a.x),clamp(b.x)),y=Math.min(clamp(a.y),clamp(b.y)),w=Math.abs(clamp(a.x)-clamp(b.x)),h=Math.abs(clamp(a.y)-clamp(b.y));return w<.005||h<.005?null:{x,y,w,h};
+}
+
+function exhibitStoreIds(u:any):string[]{return Array.isArray(u?.app_metadata?.exhibit_store_ids)?[...new Set((u.app_metadata.exhibit_store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
+async function exhibitRoot(store:any){const folder=await liveFolder(store);return folder.path_display+'/exhibidores';}
+async function ensureExhibitFolders(root:string){for(const path of [root,root+'/registros',root+'/imagenes']){try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const f=await dbx('files/get_metadata',{path});if(f['.tag']!=='folder')throw new PortalError(409,'Hay un archivo ocupando la carpeta de exhibidores.');}}}
+async function exhibitRead(root:string,id:string){
+ if(!uuid(id))throw new PortalError(404,'Exhibidor no disponible.');
+ let meta:any;try{meta=await dbx('files/get_metadata',{path:root+'/registros/'+id+'.json'});}catch(e){if(e instanceof DropboxNotFound)throw new PortalError(404,'Exhibidor no disponible.');throw e;}
+ if(meta['.tag']!=='file'||meta.size>800000||String(meta.path_lower)!==(root+'/registros/'+id+'.json').toLowerCase())throw new PortalError(404,'Exhibidor no disponible.');
+ const response=await content('files/download',{path:meta.id});const bytes=await bounded(response,800000);let saved:any;try{saved=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new PortalError(502,'El archivo del exhibidor no se puede leer.');}
+ return {id,revision:meta.rev,updatedAt:meta.server_modified,data:validateExhibit(saved.data)} as ExhibitRecord;
+}
+async function exhibitWrite(path:string,bytes:Uint8Array,revision?:string){
+ const response=await fetch('https://content.dropboxapi.com/2/files/upload',{method:'POST',headers:{Authorization:'Bearer '+await dbxToken(),'Dropbox-API-Arg':headerJSON({path,mode:revision?{'.tag':'update',update:revision}:'add',autorename:false,mute:true,strict_conflict:true}),'Content-Type':'application/octet-stream'},body:bytes});
+ if(response.status===409)throw new PortalError(409,'El exhibidor cambió en otra sesión. Vuelve a abrirlo antes de guardar.');
+ if(!response.ok)throw new PortalError(response.status===429?429:502,'No se pudo guardar el exhibidor en Dropbox.');return await response.json();
+}
+async function exhibitRoutes(r:Request,p:string[],user:any){
+ const method=r.method,query=new URL(r.url).searchParams;
+ const store=await requireStore(query.get('store'),user,'exhibitors'),root=await exhibitRoot(store),admin=user.app_metadata.role==='admin';
+ if(p.length===1&&method==='GET'){
+  let listing:any;const cursor=query.get('cursor');
+  try{if(cursor){const t=await unseal('exhibit-list',cursor);if(t.uid!==user.id||t.store!==store.id||t.expires<Date.now())throw new PortalError(400,'Actualiza la lista de exhibidores.');listing=await dbx('files/list_folder/continue',{cursor:t.cursor});}else listing=await dbx('files/list_folder',{path:root+'/registros',limit:100,recursive:false});}catch(e){if(e instanceof DropboxNotFound)return json({exhibitors:[],next:null});throw e;}
+  const items=[];for(const f of listing.entries){const id=String(f.name).replace(/\.json$/,'');if(f['.tag']!=='file'||!uuid(id))continue;const rec=await exhibitRead(root,id);if(admin||rec.data.published)items.push({id:rec.id,revision:rec.revision,updatedAt:rec.updatedAt,name:rec.data.name,project:rec.data.project,count:rec.data.products.length,published:rec.data.published});}
+  return json({exhibitors:items,next:listing.has_more?await seal('exhibit-list',{uid:user.id,store:store.id,cursor:listing.cursor,expires:Date.now()+900000}):null});
+ }
+ if(p.length===2&&p[1]==='assets'&&method==='POST'){
+  membership(user,true);const b=await bodyJSON(r,12000000);const data=b.dataUrl;
+  if(typeof data!=='string'||data.length>11500000||!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(data))throw new PortalError(400,'Selecciona una imagen JPG, PNG o WebP de hasta 8 MB.');
+  const split=data.indexOf(','),mime=data.slice(5,data.indexOf(';')),binary=atob(data.slice(split+1));if(binary.length>8000000)throw new PortalError(413,'La imagen supera 8 MB.');const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
+  const good=mime==='image/jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:mime==='image/png'?[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v):new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP';if(!good)throw new PortalError(400,'El contenido no corresponde al formato de imagen.');
+  await ensureExhibitFolders(root);const name=crypto.randomUUID()+'.'+(mime==='image/jpeg'?'jpg':mime==='image/png'?'png':'webp');await exhibitWrite(root+'/imagenes/'+name,bytes);return json({asset:name},201);
+ }
+ if(p.length===1&&method==='POST'){
+  membership(user,true);const b=await bodyJSON(r,800000);const data=validateExhibit(b.data);await ensureExhibitFolders(root);
+  for(const asset of exhibitAssets(data)){const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+asset});if(f['.tag']!=='file')throw new PortalError(400,'Falta una imagen del exhibidor.');}
+  const id=crypto.randomUUID(),meta=await exhibitWrite(root+'/registros/'+id+'.json',new TextEncoder().encode(JSON.stringify({data})));return json({record:{id,revision:meta.rev,updatedAt:meta.server_modified,data}},201);
+ }
+ const rec=await exhibitRead(root,p[1]);if(!admin&&!rec.data.published)throw new PortalError(404,'Exhibidor no disponible.');
+ if(p.length===2&&method==='GET')return json({record:rec});
+ if(p.length===4&&p[2]==='assets'&&method==='GET'){
+  if(!exhibitAssetName(p[3])||!exhibitAssets(rec.data).includes(p[3]))throw new PortalError(404,'Imagen no disponible.');
+  const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+p[3]});if(f['.tag']!=='file'||f.size>8000000||String(f.path_lower)!==(root+'/imagenes/'+p[3]).toLowerCase())throw new PortalError(404,'Imagen no disponible.');
+  const bytes=await bounded(await content('files/download',{path:f.id}),8000000);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));const mime=p[3].endsWith('.jpg')?'image/jpeg':p[3].endsWith('.png')?'image/png':'image/webp';return json({dataUrl:'data:'+mime+';base64,'+btoa(binary)});
+ }
+ if(p.length===2&&(method==='PATCH'||method==='DELETE')){
+  membership(user,true);const b=await bodyJSON(r,800000);if(b.revision!==rec.revision)throw new PortalError(409,'El exhibidor cambió. Vuelve a abrirlo antes de guardar.');
+  if(method==='DELETE'){if(b.confirm_name!==rec.data.name)throw new PortalError(400,'Confirma el nombre del exhibidor.');await dbx('files/delete_v2',{path:root+'/registros/'+rec.id+'.json',parent_rev:rec.revision});return json({ok:true});}
+  const data=validateExhibit(b.data);for(const asset of exhibitAssets(data)){const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+asset});if(f['.tag']!=='file')throw new PortalError(400,'Falta una imagen del exhibidor.');}
+  const meta=await exhibitWrite(root+'/registros/'+rec.id+'.json',new TextEncoder().encode(JSON.stringify({data})),rec.revision);return json({record:{id:rec.id,revision:meta.rev,updatedAt:meta.server_modified,data}});
+ }
+ throw new PortalError(404,'Ruta de exhibidores no disponible.');
+}
+
 async function handleRequest(r:Request){
  try{
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -361,6 +442,7 @@ async function handleRequest(r:Request){
  if(!saved||saved.qfile!==p[1]||saved.expires<Date.now())throw new PortalError(403,'El enlace venció. Abre otra vez el respaldo.');const caller=membership(await supa('/auth/v1/admin/users/'+saved.uid));const file=await quoteFileFor(p[1],caller);const upstream=await content('files/download',{path:file.dropbox_id});return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(file.filename).replace(/'/g,'%27'),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}});
  }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
+ if(p[0]==='exhibitors')return await exhibitRoutes(r,p,user);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
  if(route==='activity/heartbeat'&&method==='POST')return json({recorded:await activityRecord(bearer(r),user,(r.body?await bodyJSON(r):{}).active===true?'pulse':'idle')});
  if(route==='activity'&&method==='GET'){
@@ -369,7 +451,7 @@ async function handleRequest(r:Request){
  return json(await supa('/rest/v1/rpc/rh_activity_report',{method:'POST',body:JSON.stringify({p_admin:user.id,p_from:from,p_to:to,p_user:who||null,p_offset:offset})}));}
 
  if(route==='stores'&&method==='GET'){
- const scope=new URL(r.url).searchParams.get('scope');if(scope&&scope!=='quotes')throw new PortalError(400,'Ámbito de tiendas no válido.');const ids=scope==='quotes'?quoteStoreIds(user):storeIds(user);if(user.app_metadata.role!=='admin'&&!ids.length)return json({stores:[]});
+ const scope=new URL(r.url).searchParams.get('scope');if(scope&&scope!=='quotes'&&scope!=='exhibitors')throw new PortalError(400,'Ámbito de tiendas no válido.');const ids=scope==='quotes'?quoteStoreIds(user):scope==='exhibitors'?exhibitStoreIds(user):storeIds(user);if(user.app_metadata.role!=='admin'&&!ids.length)return json({stores:[]});
  const filter=user.app_metadata.role==='admin'?'':'&id=in.('+ids.join(',')+')';
  return json({stores:(await supa('/rest/v1/rh_stores?select=id,name,enabled&enabled=eq.true&order=name.asc&limit=1000'+filter)).map(safeStore)});}
  if(route==='stores'&&method==='POST'){
@@ -596,7 +678,7 @@ async function handleRequest(r:Request){
  return json({users:all.filter(u=>u.app_metadata?.rh_portal).map(safeUser)});}
  if(route==='users'&&method==='POST'){
  const b:any=await bodyJSON(r);const assignedStores=await validateStoreIds(b.store_ids??[]);const quotePermissions=await validateQuotePermissions(b);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
- const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,...quotePermissions,store_ids:assignedStores}})});
+ const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,...quotePermissions,exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids??[]),store_ids:assignedStores}})});
  return json({user:safeUser(u)},201);}
  if(p[0]==='users'&&p.length===2&&(method==='PATCH'||method==='DELETE')){
  if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Usuario no encontrado.');
@@ -613,6 +695,7 @@ async function handleRequest(r:Request){
  if(b.role!==undefined&&b.role!=='admin'&&b.role!=='reader')throw new PortalError(400,'Permisos no válidos.');
  if(b.store_ids!==undefined)changes.app_metadata={...target.app_metadata,store_ids:await validateStoreIds(b.store_ids)};
  if(b.quote_view_store_ids!==undefined||b.quote_approve_store_ids!==undefined||b.quote_approval!==undefined){changes.app_metadata={...(changes.app_metadata||target.app_metadata),...await validateQuotePermissions(b,target.app_metadata)};}
+ if(b.exhibit_store_ids!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids)};
  if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
  if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de entre 12 y 256 caracteres.');changes.password=b.password;}
  if(!Object.keys(changes).length)throw new PortalError(400,'No hay cambios para guardar.');

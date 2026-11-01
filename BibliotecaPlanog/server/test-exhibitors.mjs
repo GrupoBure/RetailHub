@@ -1,0 +1,48 @@
+import {createRequire} from 'node:module';import {readFileSync} from 'node:fs';import assert from 'node:assert/strict';
+const ts=createRequire(new URL('../source/package.json',import.meta.url))('typescript');
+const read=p=>readFileSync(new URL(p,import.meta.url),'utf8'),uri=s=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+const model=read('../source/src/exhibit-model.ts'),m=await import(uri(model));const sid='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',uid='11111111-1111-4111-8111-111111111111';
+const {measurementSvg}=await import(uri(read('../source/src/exhibit-measurements.ts')));
+const safeSvg=measurementSvg({code:'<script>',key:'"test"',description:'<img onerror="x">',dimensions:'2 & 3 cm',installation:'Confirmar <corte>'},'javascript:alert(1)');
+assert.ok(safeSvg.includes('&lt;script&gt;'));assert.ok(safeSvg.includes('2 &amp; 3 cm'));assert.ok(!safeSvg.includes('<script>'));assert.ok(!safeSvg.includes('javascript:'));assert.ok(!safeSvg.includes('<image '));
+const asset='22222222-2222-4222-8222-222222222222.png';
+const data={name:'Exhibidor de prueba',project:'Proyecto',notes:'Plano nuevo',referenceNote:m.EXHIBIT_REFERENCE,photo:asset,plan:'',planNote:'Referencia',published:false,products:[{id:uid,code:'12345',description:'Artículo actual',key:'TEST',brand:'Marca',dimensions:'Alto: 3 cm',installation:'Corte por confirmar',source:'https://www.truper.com/ficha_tecnica/?code=12345',image:asset,drawing:'',specs:[{label:'Uso',value:'Interior'}],zone:{x:.1,y:.2,w:.3,h:.4},placement:'Aquí irá el producto nuevo'}]};
+assert.equal(m.validateExhibit(data).products[0].code,'12345');assert.deepEqual(m.exhibitAssets(data),[asset]);
+for(const zone of [{x:-.1,y:0,w:.2,h:.2},{x:.9,y:0,w:.2,h:.2},{x:0,y:0,w:NaN,h:.2},{x:0,y:0,w:0,h:.2}])assert.throws(()=>m.validateExhibit({...data,products:[{...data.products[0],zone}]}));
+for(const source of ['javascript:alert(1)','https://truper.com.evil.test/x','http://www.truper.com/x','https://user@www.truper.com/x'])assert.throws(()=>m.validateExhibit({...data,products:[{...data.products[0],source}]}));
+assert.throws(()=>m.validateExhibit({...data,products:[...data.products,...data.products]}));assert.throws(()=>m.validateExhibit({...data,photo:'../../photo.svg'}));assert.throws(()=>m.validateExhibit({...data,published:true,photo:''}));
+assert.deepEqual(m.zoneFromDrag({x:.5,y:.6},{x:.1,y:.2}),{x:.1,y:.2,w:.4,h:.39999999999999997});assert.equal(m.zoneFromDrag({x:0,y:0},{x:.001,y:.001}),null);
+let role='admin',grants=[],enabled=true,active=true,handler,version=0;const files=new Map(),folders=new Set(['/Retail Hub/Portal/Demo']),root='/Retail Hub/Portal/Demo/exhibidores';
+const meta=(path,bytes)=>({'.tag':'file',name:path.split('/').at(-1),path_lower:path.toLowerCase(),path_display:path,id:path,rev:'rev'+(++version),size:bytes.length,server_modified:'2026-11-01T00:00:00Z'});
+const reply=(d,status=200)=>new Response(JSON.stringify(d),{status});
+globalThis.Deno={env:{get:k=>({SUPABASE_URL:'https://demo.supabase.co',SUPABASE_ANON_KEY:'anon',SUPABASE_SERVICE_ROLE_KEY:'service',DROPBOX_APP_KEY:'key',DROPBOX_APP_SECRET:'secret',DROPBOX_REFRESH_TOKEN:'refresh'})[k]},serve:fn=>handler=fn};
+const server=read('./retailhub-api.ts');assert.ok(server.includes(model.trim()));await import(uri(server));
+globalThis.fetch=async(url,init={})=>{
+ const u=new URL(url),b=typeof init.body==='string'?JSON.parse(init.body):null;
+ if(u.pathname==='/auth/v1/user')return reply({id:uid,app_metadata:{rh_portal:true,role,disabled:!enabled,store_ids:[sid],exhibit_store_ids:grants}});
+ if(u.pathname==='/rest/v1/rh_stores')return reply(active?[{id:sid,name:'Demo',enabled:true,dropbox_id:'/Retail Hub/Portal/Demo'}]:[]);
+ if(u.pathname==='/oauth2/token')return reply({access_token:'dropbox',expires_in:3600});
+ if(u.hostname==='api.dropboxapi.com'){
+  if(u.pathname.endsWith('/files/get_metadata')){if(folders.has(b.path))return reply({'.tag':'folder',path_display:b.path,path_lower:b.path.toLowerCase(),name:b.path.split('/').at(-1)});if(files.has(b.path))return reply(files.get(b.path).meta);return reply({error_summary:'path/not_found/'},409);}
+  if(u.pathname.endsWith('/files/create_folder_v2')){if(folders.has(b.path))return reply({error_summary:'path/conflict/'},409);folders.add(b.path);return reply({metadata:{'.tag':'folder',path_display:b.path}});}
+  if(u.pathname.endsWith('/files/list_folder')){if(!folders.has(b.path))return reply({error_summary:'path/not_found/'},409);return reply({entries:[...files].filter(([p])=>p.startsWith(b.path+'/')&&!p.slice(b.path.length+1).includes('/')).map(([,v])=>v.meta),has_more:false});}
+  if(u.pathname.endsWith('/files/delete_v2')){const f=files.get(b.path);if(!f||f.meta.rev!==b.parent_rev)return reply({error_summary:'path/conflict/'},409);files.delete(b.path);return reply({metadata:f.meta});}
+ }
+ if(u.hostname==='content.dropboxapi.com'){
+  const args=JSON.parse(init.headers['Dropbox-API-Arg']);
+  if(u.pathname.endsWith('/files/download')){const f=files.get(args.path);assert.ok(f,'Missing mock file '+args.path);return new Response(f.bytes);}
+  if(u.pathname.endsWith('/files/upload')){const old=files.get(args.path);if(typeof args.mode==='object'?(old?.meta.rev!==args.mode.update):!!old)return reply({error_summary:'path/conflict/'},409);const bytes=new Uint8Array(init.body),info=meta(args.path,bytes);files.set(args.path,{bytes,meta:info});return reply(info);}
+ }
+ throw Error('Unexpected route '+u.pathname);
+};
+const request=(path,method='GET',body)=>handler(new Request('https://demo.supabase.co/functions/v1/retailhub-api/exhibitors'+path+(path.includes('?')?'&':'?')+'store='+sid,{method,headers:{authorization:'Bearer test',origin:'https://retailhub.mx','content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}));
+const image=new Uint8Array([137,80,78,71,13,10,26,10]);files.set(root+'/imagenes/'+asset,{bytes:image,meta:meta(root+'/imagenes/'+asset,image)});
+let checks=0;async function check(name,fn){await fn();checks++;console.log('PASS '+name);}
+await check('unassigned readers cannot see exhibitors despite library permission',async()=>{role='reader';assert.equal((await request('')).status,404);role='admin';});
+await check('listing does not create folders; creating a draft persists only in Dropbox',async()=>{const before=folders.size;assert.equal((await request('')).status,200);assert.equal(folders.size,before);const r=await request('','POST',{data});assert.equal(r.status,201);const saved=(await r.json()).record;globalThis.saved=saved;assert.equal(files.get(root+'/registros/'+saved.id+'.json').bytes.length>0,true);});
+await check('published state and independent grants protect detail and images',async()=>{role='reader';grants=[sid];assert.equal((await request('/'+saved.id)).status,404);assert.equal((await request('/'+saved.id+'/assets/'+asset)).status,404);assert.equal((await request('','POST',{data})).status,403);role='admin';const r=await request('/'+saved.id,'PATCH',{revision:saved.revision,data:{...data,published:true}});assert.equal(r.status,200);globalThis.saved=(await r.json()).record;role='reader';assert.equal((await request('/'+saved.id)).status,200);const image=await request('/'+saved.id+'/assets/'+asset);assert.equal(image.status,200);assert.match((await image.json()).dataUrl,/^data:image\/png;base64,/);role='admin';});
+await check('stale updates cannot overwrite newer data; unreferenced media is denied',async()=>{assert.equal((await request('/'+saved.id,'PATCH',{revision:'stale',data})).status,409);assert.equal((await request('/'+saved.id+'/assets/33333333-3333-4333-8333-333333333333.png')).status,404);});
+await check('reader writes, disabled sessions and revoked grants are denied immediately',async()=>{role='reader';for(const [p,method]of [['/'+saved.id,'PATCH'],['/'+saved.id,'DELETE'],['/assets','POST']])assert.equal((await request(p,method,{revision:saved.revision,data})).status,403);grants=[];assert.equal((await request('/'+saved.id)).status,404);grants=[sid];enabled=false;assert.equal((await request('/'+saved.id)).status,403);enabled=true;active=false;assert.equal((await request('/'+saved.id)).status,404);active=true;role='admin';});
+await check('only actual raster images upload; SVG and oversized/invalid formats are rejected',async()=>{assert.equal((await request('/assets','POST',{dataUrl:'data:image/svg+xml;base64,PHN2Zz4='})).status,400);assert.equal((await request('/assets','POST',{dataUrl:'data:image/png;base64,SGVsbG8='})).status,400);assert.equal((await request('/assets','POST',{dataUrl:'data:image/png;base64,'+Buffer.from(image).toString('base64')})).status,201);});
+await check('delete requires exact name and revision, retaining images',async()=>{assert.equal((await request('/'+saved.id,'DELETE',{revision:saved.revision,confirm_name:'Other'})).status,400);assert.equal((await request('/'+saved.id,'DELETE',{revision:saved.revision,confirm_name:data.name})).status,200);assert.ok(files.has(root+'/imagenes/'+asset));assert.equal((await request('/'+saved.id)).status,404);});
+console.log('Exhibitor model and '+checks+' API scenarios passed with mocked Dropbox/Auth.');
