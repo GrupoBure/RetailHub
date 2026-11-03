@@ -443,6 +443,26 @@ const accessoryCode=(v:unknown)=>typeof v==='string'&&/^[A-Z0-9][A-Z0-9_-]{0,39}
 const accessoryAsset=(v:unknown)=>typeof v==='string'&&/^[a-f0-9-]{36}\.(?:pdf|jpg|png|webp)$/.test(v);
 async function accessoryRoutes(r:Request,p:string[],user:any){
  const root=config().root+'/_accesorios',admin=user.app_metadata.role==='admin',code=p[1];
+ if(p.length===1&&r.method==='GET'){
+  const path=root+'/registros', accessories:{code:string;name:string}[]=[];
+  let listing:any;
+  try{listing=await dbx('files/list_folder',{path,recursive:false,limit:100});}
+  catch(e){if(e instanceof DropboxNotFound)return json({accessories});throw e;}
+  for(;;){
+   const entries=listing.entries.filter((e:any)=>e['.tag']==='file'&&typeof e.name==='string'&&e.name.endsWith('.json')&&accessoryCode(e.name.slice(0,-5))&&e.path_lower===(path+'/'+e.name).toLowerCase());
+   for(let i=0;i<entries.length;i+=6){
+    await Promise.all(entries.slice(i,i+6).map(async(e:any)=>{
+     let data:any;
+     try{data=JSON.parse(new TextDecoder().decode(await bounded(await content('files/download',{path:e.id}),32000)));}
+     catch(err){if(err instanceof SyntaxError||err instanceof DropboxNotFound)return;throw err;}
+     if(data?.code===e.name.slice(0,-5)&&typeof data.name==='string'&&Array.isArray(data.images)&&Array.isArray(data.readers)&&(admin||data.readers.includes(user.id)))accessories.push({code:data.code,name:data.name});
+    }));
+   }
+   if(!listing.has_more)break;
+   listing=await dbx('files/list_folder/continue',{cursor:listing.cursor});
+  }
+  return json({accessories:accessories.sort((a,b)=>a.code.localeCompare(b.code,'es',{numeric:true}))});
+ }
  if(code==='archivo'&&p.length===2&&r.method==='POST'){
   membership(user,true);const mime=(r.headers.get('content-type')||'').split(';')[0];
   const ext=({'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png','image/webp':'webp'} as Record<string,string>)[mime];
