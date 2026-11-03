@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitors-6';
+const API_BUILD = 'accessories-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -115,7 +115,7 @@ async function validateQuotePermissions(b:any,current:any={}){
  if(approve.some(id=>!view.includes(id)))throw new PortalError(400,'Para autorizar una tienda también debes permitir ver sus cotizaciones.');
  return {quote_view_store_ids:view,quote_approve_store_ids:approve,quote_approval:false};
 }
-function validStoreName(value:unknown){const name=typeof value==='string'?value.trim().normalize('NFC'):'';if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');return name;}
+function validStoreName(value:unknown){const name=typeof value==='string'?value.trim().normalize('NFC'):'';if(!name||name.length>100||/[\/\\\u0000-\u001f]/.test(name)||name==='.'||name==='..'||name.toLowerCase()==='_accesorios')throw new PortalError(400,'Escribe un nombre de tienda válido, sin diagonales.');return name;}
 type Section='Planogramas'|'Listados';
 const fileSection=(name:string):Section|null=>/\.pdf$/i.test(name)?'Planogramas':/\.(xlsx|xls)$/i.test(name)?'Listados':null;
 function sectionName(value:unknown):Section|null{const v=typeof value==='string'?value.toLowerCase():'';return v==='planogramas'?'Planogramas':v==='listados'?'Listados':null;}
@@ -133,7 +133,7 @@ async function ensureSectionFolders(folder:any){
  }
 }
 const safeStore=(s:any)=>({id:s.id,name:s.name,enabled:s.enabled});
-function folderIsStore(e:any){const root=config().root.toLowerCase()+'/';return e?.['.tag']==='folder'&&String(e.path_lower||'').startsWith(root)&&!String(e.path_lower).slice(root.length).includes('/');}
+function folderIsStore(e:any){const root=config().root.toLowerCase()+'/';return e?.['.tag']==='folder'&&String(e.path_lower||'').startsWith(root)&&!String(e.path_lower).slice(root.length).includes('/')&&e.path_lower!==root+'_accesorios';}
 async function saveStoreFolder(e:any){
  if(!folderIsStore(e))throw new PortalError(400,'La tienda debe ser una carpeta directamente dentro de Retail Hub/Portal.');
  const rows=await supa('/rest/v1/rh_stores?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body:JSON.stringify({dropbox_id:e.id,name:e.name,path_lower:e.path_lower,updated_at:new Date().toISOString()})});return rows[0];
@@ -439,6 +439,50 @@ async function exhibitWrite(path:string,bytes:Uint8Array,revision?:string){
  if(response.status===409)throw new PortalError(409,'El exhibidor cambió en otra sesión. Vuelve a abrirlo antes de guardar.');
  if(!response.ok)throw new PortalError(response.status===429?429:502,'No se pudo guardar el exhibidor en Dropbox.');return await response.json();
 }
+const accessoryCode=(v:unknown)=>typeof v==='string'&&/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(v);
+const accessoryAsset=(v:unknown)=>typeof v==='string'&&/^[a-f0-9-]{36}\.(?:pdf|jpg|png|webp)$/.test(v);
+async function accessoryRoutes(r:Request,p:string[],user:any){
+ const root=config().root+'/_accesorios',admin=user.app_metadata.role==='admin',code=p[1];
+ if(code==='archivo'&&p.length===2&&r.method==='POST'){
+  membership(user,true);const mime=(r.headers.get('content-type')||'').split(';')[0];
+  const ext=({'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png','image/webp':'webp'} as Record<string,string>)[mime];
+  if(typeof ext!=='string')throw new PortalError(415,'Sube PDF, JPG, PNG o WebP.');
+  const bytes=await bounded(r,10000000);
+  if(ext==='pdf'){if(new TextDecoder().decode(bytes.slice(0,5))!=='%PDF-')throw new PortalError(400,'El archivo no es un PDF válido.');}
+  else try{checkExhibitImage(mime,bytes);}catch(e){if(e instanceof ExhibitImageError)throw new PortalError(e.status,e.message);throw e;}
+  await ensureExhibitFolders(root);const asset=crypto.randomUUID()+'.'+ext;
+  await exhibitWrite(root+'/imagenes/'+asset,bytes);return json({asset},201);
+ }
+ if(!accessoryCode(code))throw new PortalError(404,'Accesorio no disponible.');
+ const path=root+'/registros/'+code+'.json';
+ if(p.length===2&&['POST','PATCH'].includes(r.method)){
+  membership(user,true);const b=await bodyJSON(r,32000);
+  const name=typeof b.name==='string'?b.name.trim():'',details=typeof b.details==='string'?b.details.trim():'';
+  const pdf=b.pdf||'',images=b.images,readers=b.readers;
+  if(!name||name.length>160||details.length>6000||!Array.isArray(images)||images.length>12||images.some(x=>!accessoryAsset(x)||x.endsWith('.pdf'))||new Set(images).size!==images.length||(pdf&&(!accessoryAsset(pdf)||!pdf.endsWith('.pdf')))||!Array.isArray(readers)||readers.length>500||readers.some(x=>!uuid(x)))throw new PortalError(400,'Revisa los datos, archivos y permisos del accesorio.');
+  if(r.method==='PATCH'&&(typeof b.revision!=='string'||!b.revision))throw new PortalError(409,'Vuelve a abrir la ficha antes de guardar.');
+  await ensureExhibitFolders(root);
+  for(const asset of [...images,...(pdf?[pdf]:[])]){const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+asset});if(f['.tag']!=='file'||f.path_lower!==(root+'/imagenes/'+asset).toLowerCase())throw new PortalError(400,'Un archivo de la ficha no está disponible.');}
+  const data={code,name,details,pdf,images,readers:[...new Set(readers)]};
+  const meta=await exhibitWrite(path,new TextEncoder().encode(JSON.stringify(data)),r.method==='PATCH'?b.revision:undefined);
+  return json({accessory:{...data,revision:meta.rev}},r.method==='POST'?201:200);
+ }
+ if(r.method!=='GET')throw new PortalError(404,'Ruta no encontrada.');
+ let meta:any;try{meta=await dbx('files/get_metadata',{path});}catch(e){if(e instanceof DropboxNotFound)throw new PortalError(404,'Accesorio no disponible.');throw e;}
+ if(meta['.tag']!=='file'||meta.path_lower!==path.toLowerCase())throw new PortalError(404,'Accesorio no disponible.');
+ const data=JSON.parse(new TextDecoder().decode(await bounded(await content('files/download',{path:meta.id}),32000)));
+ if(data.code!==code||!Array.isArray(data.images)||!Array.isArray(data.readers)||(!admin&&!data.readers.includes(user.id)))throw new PortalError(404,'Accesorio no disponible.');
+ if(p.length===2){const {readers,...visible}=data;return json({accessory:admin?{...visible,readers,revision:meta.rev}:visible});}
+ const asset=p[3];
+ if(p.length!==4||p[2]!=='archivo'||!accessoryAsset(asset)||![data.pdf,...data.images].includes(asset))throw new PortalError(404,'Archivo no disponible.');
+ const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+asset});
+ if(f['.tag']!=='file'||f.path_lower!==(root+'/imagenes/'+asset).toLowerCase()||f.size>10000000)throw new PortalError(404,'Archivo no disponible.');
+ const bytes=await bounded(await content('files/download',{path:f.id}),10000000);let binary='';
+ for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
+ const mime=asset.endsWith('.pdf')?'application/pdf':asset.endsWith('.jpg')?'image/jpeg':asset.endsWith('.png')?'image/png':'image/webp';
+ return json({dataUrl:'data:'+mime+';base64,'+btoa(binary)});
+}
+
 async function exhibitRoutes(r:Request,p:string[],user:any){
  const method=r.method,query=new URL(r.url).searchParams;
  const store=await requireStore(query.get('store'),user,'exhibitors'),root=await exhibitRoot(store),admin=user.app_metadata.role==='admin';
@@ -480,7 +524,7 @@ async function handleRequest(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -521,6 +565,7 @@ async function handleRequest(r:Request){
  if(!saved||saved.qfile!==p[1]||saved.expires<Date.now())throw new PortalError(403,'El enlace venció. Abre otra vez el respaldo.');const caller=membership(await supa('/auth/v1/admin/users/'+saved.uid));const file=await quoteFileFor(p[1],caller);const upstream=await content('files/download',{path:file.dropbox_id});return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(file.filename).replace(/'/g,'%27'),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}});
  }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
+ if(p[0]==='accessories')return await accessoryRoutes(r,p,user);
  if(p[0]==='exhibitors')return await exhibitRoutes(r,p,user);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
  if(route==='activity/heartbeat'&&method==='POST')return json({recorded:await activityRecord(bearer(r),user,(r.body?await bodyJSON(r):{}).active===true?'pulse':'idle')});

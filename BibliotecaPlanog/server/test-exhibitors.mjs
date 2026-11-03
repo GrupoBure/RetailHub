@@ -51,3 +51,19 @@ await check('10 MB images upload and read back; one byte above the limit is reje
 await check('binary uploads preserve original bytes, enforce 10 MB and stay admin-only',async()=>{const raw=new Uint8Array(10000000);raw.set(image);const init=w.exhibitImageRequest('',true,new Blob([raw],{type:'image/png'}));assert.ok(init.body instanceof Blob);assert.equal(init.headers['Content-Type'],'image/png');const req=()=>new Request('https://demo.supabase.co/functions/v1/retailhub-api/exhibitors/assets?store='+sid,{...init,headers:{...init.headers,authorization:'Bearer test',origin:'https://retailhub.mx'}});role='reader';assert.equal((await handler(req())).status,403);role='admin';const r=await handler(req());assert.equal(r.status,201);const uploaded=(await r.json()).asset;assert.deepEqual(files.get(root+'/imagenes/'+uploaded).bytes,raw);const tooLarge=new Request('https://demo.supabase.co/functions/v1/retailhub-api/exhibitors/assets?store='+sid,{method:'POST',headers:{'Content-Type':'image/png',authorization:'Bearer test',origin:'https://retailhub.mx'},body:new Uint8Array(10000001)});assert.equal((await handler(tooLarge)).status,413);const base64='data:image/png;base64,'+Buffer.from(image).toString('base64'),binaryInit=w.exhibitImageRequest(base64,true);assert.deepEqual(new Uint8Array(await binaryInit.body.arrayBuffer()),image);assert.equal(typeof w.exhibitImageRequest(base64,false).body,'string');});
 await check('delete requires exact name and revision, retaining images',async()=>{assert.equal((await request('/'+saved.id,'DELETE',{revision:saved.revision,confirm_name:'Other'})).status,400);assert.equal((await request('/'+saved.id,'DELETE',{revision:saved.revision,confirm_name:data.name})).status,200);assert.ok(files.has(root+'/imagenes/'+asset));assert.equal((await request('/'+saved.id)).status,404);});
 console.log('Exhibitor model and '+checks+' API scenarios passed with mocked Dropbox/Auth.');
+const accessory=(path,method='GET',body,type='application/json')=>handler(new Request('https://demo.supabase.co/functions/v1/retailhub-api/accessories/'+path,{method,headers:{authorization:'Bearer test',origin:'https://retailhub.mx','content-type':type},body:body===undefined?undefined:type==='application/json'?JSON.stringify(body):body}));
+await check('accessory authorization covers metadata and attached PDF, including revocation',async()=>{
+ const upload=await accessory('archivo','POST',new TextEncoder().encode('%PDF-1.7\n'), 'application/pdf');assert.equal(upload.status,201);
+ const {asset:pdf}=await upload.json(),data={name:'Accesorio de prueba',details:'Plano propio',pdf,images:[],readers:[]};
+ const created=await accessory('DEMO-1','POST',data);assert.equal(created.status,201);
+ const first=(await created.json()).accessory;
+ role='reader';assert.equal((await accessory('DEMO-1')).status,404);assert.equal((await accessory('DEMO-1/archivo/'+pdf)).status,404);
+ assert.equal((await accessory('DEMO-1','PATCH',{...data,readers:[uid],revision:first.revision})).status,403);
+ role='admin';const grant=await accessory('DEMO-1','PATCH',{...data,readers:[uid],revision:first.revision});assert.equal(grant.status,200);
+ const second=(await grant.json()).accessory;
+ role='reader';const visible=await accessory('DEMO-1');assert.equal(visible.status,200);assert.equal((await visible.json()).accessory.readers,undefined);
+ assert.equal((await accessory('DEMO-1/archivo/'+pdf)).status,200);
+ assert.equal((await accessory('DEMO-1/archivo/'+asset)).status,404);
+ role='admin';assert.equal((await accessory('DEMO-1','PATCH',{...data,revision:second.revision})).status,200);
+ role='reader';assert.equal((await accessory('DEMO-1/archivo/'+pdf)).status,404);role='admin';
+});
