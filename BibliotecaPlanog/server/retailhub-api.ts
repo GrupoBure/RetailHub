@@ -463,6 +463,14 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
   }
   return json({graphics});
  }
+ if(r.method==='POST'&&p.length===2&&p[1]==='original'){
+  const {id}=await bodyJSON(r,2048);
+  if(typeof id!=='string'||!/^id:[A-Za-z0-9_-]+$/.test(id))throw new PortalError(404,'Gráfico no disponible.');
+  const e=await dbx('files/get_metadata',{path:id});
+  if(!graphicFile(e))throw new PortalError(404,'Gráfico no disponible.');
+  const upstream=await content('files/download',{path:id});
+  return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+ }
  if(r.method==='POST'&&p.length===2&&p[1]==='link'){
   const {id}=await bodyJSON(r,2048);
   if(typeof id!=='string'||!/^id:[A-Za-z0-9_-]+$/.test(id))throw new PortalError(404,'Gráfico no disponible.');

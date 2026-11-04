@@ -65,6 +65,7 @@ export default function Portal(){
  const endpoint=isMail?base.replace(/\/retailhub-api$/,'/retailhub-mail')+'/'+path.slice(5):base+'/'+path;
  const r=await fetch(endpoint,{...init,headers:h,...(isMail&&!init.signal?{signal:AbortSignal.timeout(90000)}:{})});
  if(r.status===401&&retry&&path!=='login'&&session?.refresh_token){await renewSession();return api(path,init,false);}
+ if(path==='graphics/original'&&r.ok)return r.blob();
  const d:any=r.status===204?{}:await r.json().catch(()=>({error:isMail?'El servidor de correo no está disponible.':'No se pudo leer la respuesta del portal.'}));if(!r.ok)throw new PortalRequestError(typeof d.error==='string'?d.error:typeof d.message==='string'?d.message:'No se pudo completar la solicitud (HTTP '+r.status+').',r.status);saveSession(d);return d;
  };
  useEffect(()=>{let active=true;setMailAccess(false);if(user&&!preview)api('mail/me').then(d=>{if(active)setMailAccess(!!d.account);}).catch(()=>{});return()=>{active=false;};},[user?.id,user?.role,preview]);
