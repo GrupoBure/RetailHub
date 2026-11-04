@@ -441,6 +441,39 @@ async function exhibitWrite(path:string,bytes:Uint8Array,revision?:string){
 }
 const accessoryCode=(v:unknown)=>typeof v==='string'&&/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(v);
 const accessoryAsset=(v:unknown)=>typeof v==='string'&&/^[a-f0-9-]{36}\.(?:pdf|jpg|png|webp)$/.test(v);
+const graphicSpecs:Record<string,[string,string,number,number]>={"Gatos y torres": ["FichasGatosHidraulicos", "PVC 3ml", 14, 9], "Mallas Andrew": ["FichasTecnicasMayas", "PVC 3ml", 11, 16.5], "Desbozadoras": ["FichasTecnicasDesmalezadorasyD", "PVC 3ml", 17.5, 30], "fichas supermaq3": ["FichasTecnicasSupermaqDobles", "PVC 3ml", 14.5, 14.5], "fichas supermaq": ["FichasTecnicasSupermaq", "PVC 3ml", 9.5, 14.5], "Aspiradoras": ["FichasAspira", "PVC 3ml", 22, 15], "Lijadoras-cepillos": ["FichasLijaCepilloSierraInglete", "PVC 3ml", 20, 12], "PASILLOS": ["Indicadores de pasillo", "PVC 3ml", 30, 36], "Poliuretano": ["FichaPoliuretano", "PVC 3ml", 39, 7], "Sopladoras y cortadoras": ["FichaSopladora", "PVC 3ml", 29, 17.5], "Bombas sumergibles": ["FichasTecnicasBombasSumEhidro", "PVC 3ml", 10, 15], "Lonas Andrew": ["FichasTecnicasLonas", "PVC 3ml", 7.5, 30], "Inversores": ["FichasInversores", "PVC 3ml", 12, 12], "Tanques de gas": ["FichastecnicasTanquesGas", "Iman 1 ml", 15, 20], "mallas1-109x42.jpg": ["Mallas1", "Estireno 1 ml", 120, 42], "mallas2-119x67.jpg": ["Mallas2", "Estireno 1 ml", 120, 67], "calentadores-86.50x15.5.jpg": ["CalentadorAltoValor", "Estireno 1 ml", 80, 15.5], "horario.jpg": ["Horario", "Recorte de Vinil para vidrio 2 colores", 29, 29], "abierto.jpg": ["Abierto/Cerrado", "Estireno 1 ml impreso ambos lados", 28, 21], "cerrado.jpg": ["Abierto/Cerrado", "Estireno 1 ml impreso ambos lados", 28, 21], "metodosdepago.jpg": ["Metodosdepago", "Estireno 1 ml", 30, 40], "precaucion-supermaq.jpg": ["precaucion smaq", "PVC 3ml", 40.5, 5]};
+const graphicExt=/\.(jpe?g|png|psd|pdf)$/i;
+function graphicRoot(){return config().root.replace(/\/[^/]+$/,'')+'/Gráficos';}
+function graphicAccess(user:any){return user.app_metadata.role==='admin'||String(env.RH_GRAPHICS_READERS||'').split(',').some(id=>id.trim()===user.id);}
+function graphicFile(e:any){return e?.['.tag']==='file'&&typeof e.name==='string'&&graphicExt.test(e.name)&&typeof e.path_lower==='string'&&e.path_lower.startsWith(graphicRoot().toLowerCase()+'/')&&!e.path_lower.split('/').includes('guías de impresión');}
+async function graphicsRoutes(r:Request,p:string[],user:any){
+ if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user)});
+ if(!graphicAccess(user))throw new PortalError(403,'No tienes acceso a Gráficos.');
+ if(r.method==='GET'&&p.length===1){
+  const graphics=[];
+  let l=await dbx('files/list_folder',{path:graphicRoot(),recursive:true,limit:500});
+  for(;;){
+   for(const e of l.entries.filter(graphicFile)){
+    const folder=e.path_display.slice(graphicRoot().length+1).split('/').slice(0,-1).join('/');
+    const spec=graphicSpecs[e.name.toLowerCase()]||Object.entries(graphicSpecs).find(([k])=>folder.toLowerCase().startsWith(k.toLowerCase()))?.[1];
+    graphics.push({id:e.id,name:e.name,folder,size:e.size,spec});
+   }
+   if(!l.has_more)break;
+   l=await dbx('files/list_folder/continue',{cursor:l.cursor});
+  }
+  return json({graphics});
+ }
+ if(r.method==='POST'&&p.length===2&&p[1]==='link'){
+  const {id}=await bodyJSON(r,2048);
+  if(typeof id!=='string'||!/^id:[A-Za-z0-9_-]+$/.test(id))throw new PortalError(404,'Gráfico no disponible.');
+  const e=await dbx('files/get_metadata',{path:id});
+  if(!graphicFile(e))throw new PortalError(404,'Gráfico no disponible.');
+  const ticket=await seal('graphic-file',{uid:user.id,id,expires:Date.now()+5*60000});
+  const url=new URL(r.url);url.pathname=url.pathname.replace(/\/link$/,'/file');url.searchParams.set('ticket',ticket);
+  return json({url:url.href,download:url.href+'&download=1'});
+ }
+ throw new PortalError(404,'Ruta no encontrada.');
+}
 async function accessoryRoutes(r:Request,p:string[],user:any){
  const root=config().root+'/_accesorios',admin=user.app_metadata.role==='admin',code=p[1];
  if(p.length===1&&r.method==='GET'){
@@ -584,7 +617,20 @@ async function handleRequest(r:Request){
  const token=new URL(r.url).searchParams.get('ticket')||'';if(!token||token.length>100)throw new PortalError(403,'Enlace no válido.');let saved:any;try{saved=JSON.parse(await setting('file:'+await digest(token))||'null');}catch{}
  if(!saved||saved.qfile!==p[1]||saved.expires<Date.now())throw new PortalError(403,'El enlace venció. Abre otra vez el respaldo.');const caller=membership(await supa('/auth/v1/admin/users/'+saved.uid));const file=await quoteFileFor(p[1],caller);const upstream=await content('files/download',{path:file.dropbox_id});return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(file.filename).replace(/'/g,'%27'),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}});
  }
+ if(route==='graphics/file'&&method==='GET'){
+  const url=new URL(r.url),token=url.searchParams.get('ticket')||'';
+  if(token.length>1500)throw new PortalError(403,'Enlace no válido.');
+  const t=await unseal('graphic-file',token);
+  const caller=membership(await supa('/auth/v1/admin/users/'+t.uid));
+  if(!graphicAccess(caller))throw new PortalError(403,'No tienes acceso a Gráficos.');
+  const e=await dbx('files/get_metadata',{path:t.id});
+  if(!graphicFile(e))throw new PortalError(404,'Gráfico no disponible.');
+  const original=await content('files/download',{path:t.id});
+  const mime=/\.jpe?g$/i.test(e.name)?'image/jpeg':/\.png$/i.test(e.name)?'image/png':'application/octet-stream';
+  return new Response(original.body,{headers:{...cors,'Content-Type':mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Disposition':(url.searchParams.has('download')||mime==='application/octet-stream'?'attachment':'inline')+"; filename*=UTF-8''"+encodeURIComponent(e.name).replace(/'/g,'%27')}});
+ }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
+ if(p[0]==='graphics')return await graphicsRoutes(r,p,user);
  if(p[0]==='accessories')return await accessoryRoutes(r,p,user);
  if(p[0]==='exhibitors')return await exhibitRoutes(r,p,user);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
