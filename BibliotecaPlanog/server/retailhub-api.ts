@@ -68,7 +68,7 @@ export async function requireUser(r:Request,admin=false){
  const t=bearer(r);if(!t)throw new PortalError(401,'Inicia sesión para continuar.');
  return membership(await supa('/auth/v1/user',{},t),admin);
 }
-export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),exhibit_store_ids:exhibitStoreIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
+export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,graphics_access:graphicAccess(u),last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),exhibit_store_ids:exhibitStoreIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
 export function username(v:unknown){if(typeof v!=='string'||!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(v.toLowerCase()))throw new PortalError(400,'Usa de 3 a 40 letras sin acentos, números, puntos o guiones para el usuario.');return v.toLowerCase();}
 const email=(v:unknown)=>username(v)+'@usuarios.retailhub.invalid';
 export {email};
@@ -444,7 +444,7 @@ const accessoryAsset=(v:unknown)=>typeof v==='string'&&/^[a-f0-9-]{36}\.(?:pdf|j
 const graphicSpecs:Record<string,[string,string,number,number]>={"Gatos y torres": ["FichasGatosHidraulicos", "PVC 3ml", 14, 9], "Mallas Andrew": ["FichasTecnicasMayas", "PVC 3ml", 11, 16.5], "Desbozadoras": ["FichasTecnicasDesmalezadorasyD", "PVC 3ml", 17.5, 30], "fichas supermaq3": ["FichasTecnicasSupermaqDobles", "PVC 3ml", 14.5, 14.5], "fichas supermaq": ["FichasTecnicasSupermaq", "PVC 3ml", 9.5, 14.5], "Aspiradoras": ["FichasAspira", "PVC 3ml", 22, 15], "Lijadoras-cepillos": ["FichasLijaCepilloSierraInglete", "PVC 3ml", 20, 12], "PASILLOS": ["Indicadores de pasillo", "PVC 3ml", 30, 36], "Poliuretano": ["FichaPoliuretano", "PVC 3ml", 39, 7], "Sopladoras y cortadoras": ["FichaSopladora", "PVC 3ml", 29, 17.5], "Bombas sumergibles": ["FichasTecnicasBombasSumEhidro", "PVC 3ml", 10, 15], "Lonas Andrew": ["FichasTecnicasLonas", "PVC 3ml", 7.5, 30], "Inversores": ["FichasInversores", "PVC 3ml", 12, 12], "Tanques de gas": ["FichastecnicasTanquesGas", "Iman 1 ml", 15, 20], "mallas1-109x42.jpg": ["Mallas1", "Estireno 1 ml", 120, 42], "mallas2-119x67.jpg": ["Mallas2", "Estireno 1 ml", 120, 67], "calentadores-86.50x15.5.jpg": ["CalentadorAltoValor", "Estireno 1 ml", 80, 15.5], "horario.jpg": ["Horario", "Recorte de Vinil para vidrio 2 colores", 29, 29], "abierto.jpg": ["Abierto/Cerrado", "Estireno 1 ml impreso ambos lados", 28, 21], "cerrado.jpg": ["Abierto/Cerrado", "Estireno 1 ml impreso ambos lados", 28, 21], "metodosdepago.jpg": ["Metodosdepago", "Estireno 1 ml", 30, 40], "precaucion-supermaq.jpg": ["precaucion smaq", "PVC 3ml", 40.5, 5]};
 const graphicExt=/\.(jpe?g|png|psd|pdf)$/i;
 function graphicRoot(){return config().root.replace(/\/[^/]+$/,'')+'/Gráficos';}
-function graphicAccess(user:any){return user.app_metadata.role==='admin'||String(env.RH_GRAPHICS_READERS||'').split(',').some(id=>id.trim()===user.id);}
+function graphicAccess(user:any){return user.app_metadata?.role==='admin'||(user.app_metadata?.graphics_access??String(env.RH_GRAPHICS_READERS||'').split(',').some(id=>id.trim()===user.id))===true;}
 function graphicFile(e:any){return e?.['.tag']==='file'&&typeof e.name==='string'&&graphicExt.test(e.name)&&typeof e.path_lower==='string'&&e.path_lower.startsWith(graphicRoot().toLowerCase()+'/')&&!e.path_lower.split('/').includes('guías de impresión');}
 async function graphicsRoutes(r:Request,p:string[],user:any){
  if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user)});
@@ -585,7 +585,7 @@ async function handleRequest(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -876,7 +876,7 @@ async function handleRequest(r:Request){
  return json({users:all.filter(u=>u.app_metadata?.rh_portal).map(safeUser)});}
  if(route==='users'&&method==='POST'){
  const b:any=await bodyJSON(r);const assignedStores=await validateStoreIds(b.store_ids??[]);const quotePermissions=await validateQuotePermissions(b);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
- const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,...quotePermissions,exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids??[]),store_ids:assignedStores}})});
+ const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,graphics_access:b.graphics_access===true,...quotePermissions,exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids??[]),store_ids:assignedStores}})});
  return json({user:safeUser(u)},201);}
  if(p[0]==='users'&&p.length===2&&(method==='PATCH'||method==='DELETE')){
  if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Usuario no encontrado.');
@@ -894,6 +894,7 @@ async function handleRequest(r:Request){
  if(b.store_ids!==undefined)changes.app_metadata={...target.app_metadata,store_ids:await validateStoreIds(b.store_ids)};
  if(b.quote_view_store_ids!==undefined||b.quote_approve_store_ids!==undefined||b.quote_approval!==undefined){changes.app_metadata={...(changes.app_metadata||target.app_metadata),...await validateQuotePermissions(b,target.app_metadata)};}
  if(b.exhibit_store_ids!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids)};
+ if(b.graphics_access!==undefined){if(typeof b.graphics_access!=='boolean')throw new PortalError(400,'Permiso de Gráficos no válido.');changes.app_metadata={...(changes.app_metadata||target.app_metadata),graphics_access:b.graphics_access};}
  if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
  if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de entre 12 y 256 caracteres.');changes.password=b.password;}
  if(!Object.keys(changes).length)throw new PortalError(400,'No hay cambios para guardar.');
