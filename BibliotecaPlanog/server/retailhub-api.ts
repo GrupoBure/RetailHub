@@ -208,6 +208,27 @@ export async function syncBatch(cursor?:string){
  return {count:rows.length,skipped,cursor:d.has_more?d.cursor:null};
 }
 
+// A scoped, complete snapshot detects edits, moves and deletions without granting sync rights.
+const storeRefreshes=new Map<string,Promise<void>>();
+async function refreshStoreDocuments(store:any){
+ const running=storeRefreshes.get(store.id);if(running)return running;
+ const refresh=(async()=>{
+  const key='library-sync:'+store.id;const checked=Number(await setting(key));
+  if(checked&&Date.now()-checked<15000)return;
+  // Capture candidates first: a file uploaded during the scan must never be deleted as missing.
+  const before=await supa('/rest/v1/rh_documents?store_id=eq.'+store.id+'&select=id,dropbox_id,filename,revision&limit=10001');
+  if(before.length>10000)throw new PortalError(413,'Esta tienda supera el límite de sincronización automática.');
+  const folder=await liveFolder(store),entries:any[]=[];let cursor:string|undefined;
+  do{const page=await dbx(cursor?'files/list_folder/continue':'files/list_folder',cursor?{cursor}:{path:folder.id,recursive:true,include_deleted:false,limit:2000});entries.push(...page.entries);if(entries.length>20000)throw new PortalError(413,'La carpeta supera el límite de sincronización automática.');cursor=page.has_more?page.cursor:undefined;}while(cursor);
+  const live=new Set<string>(),changes:any[]=[],cache=new Map([[folder.path_lower,store]]),previous=new Map(before.map((d:any)=>[d.dropbox_id,d]));
+  for(const file of entries){if(file['.tag']!=='file'||!sectionForPath(String(file.path_lower||''),folder.path_lower,String(file.name)))continue;const row=await record(file,cache);if(!row)continue;live.add(row.dropbox_id);const old:any=previous.get(row.dropbox_id);if(!old||old.revision!==row.revision||old.filename!==row.filename)changes.push(row);}
+  for(let i=0;i<changes.length;i+=200)await supa('/rest/v1/rh_documents?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(changes.slice(i,i+200))});
+  const missing=before.filter((d:any)=>!live.has(d.dropbox_id));
+  for(let i=0;i<missing.length;i+=100)await supa('/rest/v1/rh_documents?store_id=eq.'+store.id+'&id=in.('+missing.slice(i,i+100).map((d:any)=>d.id).join(',')+')',{method:'DELETE'});
+  await setting(key,String(Date.now()));
+ })();storeRefreshes.set(store.id,refresh);try{await refresh;}finally{storeRefreshes.delete(store.id);}
+}
+
 async function seal(type:string,value:Record<string,unknown>){return encrypted(JSON.stringify({...value,type}));}
 async function unseal(type:string,value:string){try{const data=JSON.parse(await encrypted(value,true));if(data.type!==type||!Number.isFinite(data.expires)||data.expires<Date.now())throw Error();return data;}catch{throw new PortalError(403,'La autorización venció. Vuelve a intentarlo.');}}
 async function digest(v:string){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v))),b=>b.toString(16).padStart(2,'0')).join('');}
@@ -612,7 +633,7 @@ async function handleRequest(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{liveDocuments:true,replaceReceivingBase:true,graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -859,8 +880,8 @@ async function handleRequest(r:Request){
  return json({dashboard},method==='POST'?201:200);
  }
  if(route==='documents'&&method==='GET'){
- const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});await requireStore(id,user);
- const fields='id,title,filename,category,size,modified_at,published,store_id';
+ const id=new URL(r.url).searchParams.get('store');if(!id)return json({documents:[]});const store=await requireStore(id,user);await refreshStoreDocuments(store);
+ const fields='id,title,filename,category,size,modified_at,published,store_id,revision';
  const rows=await supa('/rest/v1/rh_documents?select='+fields+'&store_id=eq.'+id+'&category=in.(Planogramas,Listados)'+(user.app_metadata.role==='admin'?'':'&published=eq.true')+'&order=modified_at.desc&limit=5000');
  return json({documents:rows.filter((d:any)=>sectionName(d.category)===fileSection(String(d.filename))&&fileSection(String(d.filename))!==null)});}
  if(p[0]==='documents'&&p[1]&&p[2]==='link'&&method==='POST'){
@@ -934,8 +955,16 @@ async function handleRequest(r:Request){
  const root=config().root;if(!root.startsWith('/')||root==='/')throw new PortalError(503,'Selecciona una carpeta dedicada para el portal.');
  const store=await requireStore(b.store_id,user);const storeFolder=await liveFolder(store);const folder=storeFolder.path_display+'/'+category.toLowerCase();
  try{await dbx('files/create_folder_v2',{path:folder,autorename:false});}catch(e){if(e instanceof PortalError&&e.message.includes('ocupado'))throw e;await dbx('files/get_metadata',{path:folder});}
+ let replaceRevision:string|undefined,replaceId:string|undefined;
+ if(b.replace_document){
+  if(category!=='Listados'||!/^listadocodigosxgondola|^listadocodigosporgondola|^baserecepcion/.test(name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''))||!/\.xlsx$/i.test(name))throw new PortalError(400,'Selecciona la base XLSX de ubicación de mercancía.');
+  const doc=await documentRecord(String(b.replace_document),user);if(doc.store_id!==store.id||doc.filename!==name)throw new PortalError(409,'La base cambió de nombre o tienda. Actualiza antes de subir.');
+  const meta=await dbx('files/get_metadata',{path:doc.dropbox_id});
+  if(typeof b.replace_revision!=='string'||b.replace_revision!==meta.rev)throw new PortalError(409,'Otra persona modificó la base. Actualiza antes de reemplazarla.');
+  replaceRevision=meta.rev;replaceId=meta.id;
+ }
  const response=await content('files/upload_session/start',{close:false},new Uint8Array());const d=await response.json() as any;
- const ticket=await seal('upload',{sid:d.session_id,path:folder+'/'+name,section:category,uid:user.id,store_id:store.id,expires:Date.now()+3600000});return json({ticket});}
+ const ticket=await seal('upload',{sid:d.session_id,path:folder+'/'+name,section:category,uid:user.id,store_id:store.id,replaceRevision,replaceId,expires:Date.now()+3600000});return json({ticket});}
  if(route==='upload/chunk'||route==='upload/finish'){
  const ticket=r.headers.get('X-Upload-Ticket');if(!ticket)throw new PortalError(400,'Falta la sesión de subida.');
  const t=await unseal('upload',ticket);const uploadStore=await requireStore(t.store_id,user);const uploadFolder=await liveFolder(uploadStore);if(!sectionForPath(String(t.path),uploadFolder.path_lower,String(t.path).split('/').at(-1)||''))throw new PortalError(403,'La tienda cambió. Inicia otra vez la subida.');if(t.uid!==user.id||t.expires<Date.now())throw new PortalError(403,'La sesión de subida venció.');
@@ -950,9 +979,10 @@ async function handleRequest(r:Request){
 
  if(route==='upload/finish'&&offset===0&&data.byteLength===0)throw new PortalError(400,'El archivo está vacío.');
  if(route==='upload/chunk'){await content('files/upload_session/append_v2',{cursor:{session_id:t.sid,offset},close:false},data);return json({ok:true});}
- const upstream=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:'add',autorename:true,mute:false,strict_conflict:false}},data);
+ if(t.replaceId){const current=await dbx('files/get_metadata',{path:t.replaceId});if(current.rev!==t.replaceRevision||current.path_lower!==String(t.path).toLowerCase())throw new PortalError(409,'La base cambió durante la subida. Actualiza y vuelve a intentarlo.');}
+ const upstream=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:t.replaceRevision?{'.tag':'update',update:t.replaceRevision}:'add',autorename:!t.replaceRevision,mute:false,strict_conflict:!!t.replaceRevision}},data);
  const rec=await record(await upstream.json());if(rec)await supa('/rest/v1/rh_documents?on_conflict=dropbox_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rec)});
- return json({ok:true});}}
+ await setting('library-sync:'+t.store_id,'0');return json({ok:true});}}
  throw new PortalError(404,'Ruta no encontrada.');
  }catch(e){if(e instanceof PortalError)return json({error:e.message},e.status);return json({error:'No se pudo completar la solicitud. Intenta nuevamente.'},500);}
 }

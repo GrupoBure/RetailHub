@@ -1,10 +1,11 @@
+import {startDocumentWatch,announceDocumentChange} from './document-watch';
 import {useEffect,useRef,useState} from 'react';
-import {ScanLine,Search,PackageCheck,MapPin,ArrowRight,RefreshCw,ExternalLink,ImageOff,LoaderCircle,CheckCircle2,AlertTriangle,FolderOpen} from 'lucide-react';
+import {Upload,ScanLine,Search,PackageCheck,MapPin,ArrowRight,RefreshCw,ExternalLink,ImageOff,LoaderCircle,CheckCircle2,AlertTriangle,FolderOpen} from 'lucide-react';
 import {findReceivingProduct,isProductPlanned,isUnplanned,normalizeReceivingInput,receivingImageURLs,receivingKey,receivingSheetURL} from './receiving-model';
 import type {ReceivingIndex,ReceivingMatch,ReceivingProduct} from './receiving-model';
 import './receiving.css';
 type Store={id:string;name:string;enabled:boolean};
-type Doc={id:string;filename:string;modified_at:string;published:boolean};
+type Doc={id:string;filename:string;modified_at:string;published:boolean;revision?:string};
 type Api=(path:string,init?:RequestInit)=>Promise<any>;
 const isReceivingBase=(d:Doc)=>/^listadocodigosxgondola|^listadocodigosporgondola|^baserecepcion/.test(receivingKey(d.filename))&&/\.xlsx$/i.test(d.filename);
 const baseLabel=(filename:string)=>filename.replace(/\.xlsx$/i,'');
@@ -26,13 +27,16 @@ function ProductPhoto({product}:{product:ReceivingProduct}){
  <a className="rx-source" href={receivingSheetURL(product.code)} target="_blank" rel="noreferrer">Consultar ficha oficial de Truper <ExternalLink size={14}/></a>
  <dialog ref={dialog} className="rx-image-dialog" onClose={()=>setZoom(false)}><button className="secondary" onClick={()=>dialog.current?.close()}>Cerrar imagen</button>{src&&<img src={src} alt={product.description}/>}</dialog></div>;
 }
-export default function Receiving({api,admin,visible,stores,store,onStore,preview=false}:{api:Api;admin:boolean;visible:boolean;stores:Store[];store:Store|null;onStore:(s:Store|null)=>void;preview?:boolean}){
+export default function Receiving({api,admin,visible,stores,store,onStore,preview=false,liveDocuments=false,replaceBase=false}:{api:Api;admin:boolean;visible:boolean;stores:Store[];store:Store|null;onStore:(s:Store|null)=>void;preview?:boolean;liveDocuments?:boolean;replaceBase?:boolean}){
+ const [uploading,setUploading]=useState(false),[uploadProgress,setUploadProgress]=useState(0),[message,setMessage]=useState(''),[watchError,setWatchError]=useState('');
+ const fileInput=useRef<HTMLInputElement>(null),current=useRef<{document:Doc|null;query:string;uploading:boolean}>({document:null,query:'',uploading:false}),retainedQuery=useRef('');
  const apiRef=useRef(api);apiRef.current=api;
  const [index,setIndex]=useState<ReceivingIndex|null>(null),[document,setDocument]=useState<Doc|null>(null),[phase,setPhase]=useState(''),[error,setError]=useState(''),[reload,setReload]=useState(0),[query,setQuery]=useState(''),[match,setMatch]=useState<ReceivingMatch|null>(null),[recent,setRecent]=useState<ReceivingProduct[]>([]);
  const input=useRef<HTMLInputElement>(null),lastLookup=useRef({query:'',at:0}),cached=useRef<{store:string;document:Doc;index:ReceivingIndex}|null>(null);
+ current.current={document,query,uploading};
  useEffect(()=>{if(!visible||!stores.length)return;if(store&&stores.some(s=>s.id===store.id))return;onStore(stores.find(s=>receivingKey(s.name).includes('martincarrera'))||stores[0]);},[visible,stores,store?.id]);
  useEffect(()=>{
-  if(!visible)return;setQuery('');setMatch(null);setRecent([]);lastLookup.current={query:'',at:0};setError('');
+  if(!visible)return;const retained=retainedQuery.current;retainedQuery.current='';setQuery(retained);setMatch(null);setRecent([]);lastLookup.current={query:'',at:0};setError('');
   if(!store){setIndex(null);setDocument(null);setPhase('');return;}if(preview){setPhase('');setIndex(null);return;}
   const controller=new AbortController(),signal=controller.signal;let active=true;
   setIndex(null);setDocument(null);setPhase('Buscando la base de recepción de esta tienda…');
@@ -43,17 +47,41 @@ export default function Receiving({api,admin,visible,stores,store,onStore,previe
    if(!docs.length)throw Error(admin?'No hay una base de recepción para esta tienda. Coloca el XLSX en su carpeta Listados con un nombre que comience por “Listado códigos x gondola” y pulsa Actualizar base.':'La base de recepción de esta tienda todavía no está disponible. Pide al administrador que la active.');
    const doc=docs[0];
    if(admin&&!doc.published){setPhase('Activando la base para los usuarios autorizados de esta tienda…');await apiRef.current('documents/'+doc.id,{method:'PATCH',body:JSON.stringify({published:true}),signal});doc.published=true;}
-   if(cached.current?.store===store.id&&cached.current.document.id===doc.id&&cached.current.document.modified_at===doc.modified_at){if(active){setIndex(cached.current.index);setDocument(doc);setPhase('');}return;}
+   if(cached.current?.store===store.id&&cached.current.document.id===doc.id&&cached.current.document.modified_at===doc.modified_at&&cached.current.document.revision===doc.revision){if(active){setIndex(cached.current.index);setDocument(doc);if(retained)setMatch(findReceivingProduct(cached.current.index,retained));setPhase('');}return;}
    setPhase('Descargando la base privada desde Dropbox…');const link=await apiRef.current('documents/'+doc.id+'/link',{method:'POST',signal});if(typeof link.url!=='string')throw Error('No se pudo abrir la base de recepción.');
    const response=await fetch(link.url,{signal});if(!response.ok)throw Error('No se pudo descargar la base. Pulsa Actualizar base para intentar de nuevo.');const length=Number(response.headers.get('content-length'));if(length>20000000)throw Error('La base supera 20 MB.');
    const buffer=await response.arrayBuffer();signal.throwIfAborted();const data=await readBase(buffer,signal,s=>{if(active)setPhase(s);});
-   cached.current={store:store.id,document:doc,index:data};if(active){setDocument(doc);setIndex(data);setPhase('');}
+   cached.current={store:store.id,document:doc,index:data};if(active){setDocument(doc);setIndex(data);if(retained)setMatch(findReceivingProduct(data,retained));setPhase('');}
   }catch(e){if(active&&!signal.aborted){setError((e as Error).message);setPhase('');}}})();
   return()=>{active=false;controller.abort();};
  },[store?.id,visible,reload,admin,preview]);
+ useEffect(()=>{
+  if(!visible||!store||preview||!liveDocuments)return;let active=true;
+  const stop=startDocumentWatch(async()=>{
+   if(current.current.uploading)return;const result=await apiRef.current('documents?store='+encodeURIComponent(store.id));if(!active)return;
+   const next=(result.documents as Doc[]).filter(isReceivingBase).sort((a,b)=>b.modified_at.localeCompare(a.modified_at))[0],old=current.current.document;
+   setWatchError('');if((old&&!next)||(next&&(!old||old.id!==next.id||old.revision!==next.revision||old.modified_at!==next.modified_at))){retainedQuery.current=current.current.query;cached.current=null;setReload(n=>n+1);setMessage('La base cambió. Se actualizó la información de ubicación.');}
+  },()=>{setWatchError('No se pudo verificar la versión de la base. Revisa tu conexión antes de clasificar mercancía.');});return()=>{active=false;stop();};
+ },[visible,store?.id,preview,liveDocuments]);
+ async function uploadBase(file?:File){
+  if(!file||!store||!admin||uploading)return;setError('');setMessage('');setUploading(true);setUploadProgress(0);
+  try{
+   if(!/\.xlsx$/i.test(file.name)||!file.size||file.size>20000000)throw Error('Selecciona un Excel XLSX de hasta 20 MB.');
+   const status=await apiRef.current('status');if(status.features?.replaceReceivingBase!==true)throw Error('Falta activar la actualización de la API para reemplazar la base con seguridad.');
+   setMessage('Validando columnas, productos y códigos de barras…');const controller=new AbortController();const checked=await readBase(await file.arrayBuffer(),controller.signal,s=>setMessage(s));
+   const result=await apiRef.current('documents?store='+encodeURIComponent(store.id));const target=(result.documents as Doc[]).filter(isReceivingBase).sort((a,b)=>b.modified_at.localeCompare(a.modified_at))[0];
+   if(target&&!target.revision)throw Error('No se pudo verificar la versión actual. Actualiza la base e intenta de nuevo.');
+   const filename=target?.filename||'Base recepción.xlsx';
+   const {ticket}=await apiRef.current('upload/start',{method:'POST',body:JSON.stringify({filename,category:'Listados',store_id:store.id,...(target?{replace_document:target.id,replace_revision:target.revision}:{})})});
+   setMessage('Subiendo la nueva base a Dropbox…');let offset=0;
+   while(offset<file.size){const chunk=file.slice(offset,offset+2*1024*1024);await apiRef.current('upload/chunk',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Upload-Ticket':ticket,'X-Upload-Offset':String(offset)},body:chunk});offset+=chunk.size;setUploadProgress(Math.round(offset/file.size*100));}
+   await apiRef.current('upload/finish',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Upload-Ticket':ticket,'X-Upload-Offset':String(offset)},body:new Uint8Array()});
+   cached.current=null;retainedQuery.current=query;setReload(n=>n+1);announceDocumentChange();setMessage('Base actualizada: '+checked.stats.products.toLocaleString('es-MX')+' productos.');
+  }catch(e){setError((e as Error).message);setMessage('');}finally{setUploading(false);if(fileInput.current)fileInput.current.value='';}
+ }
  useEffect(()=>{if(visible&&index)input.current?.focus();},[visible,index]);
  function lookup(value=query){
-  if(!index)return;const normalized=normalizeReceivingInput(value);if(!normalized)return;
+  if(!index||uploading||watchError)return;const normalized=normalizeReceivingInput(value);if(!normalized)return;
   if(lastLookup.current.query===normalized&&Date.now()-lastLookup.current.at<600)return;lastLookup.current={query:normalized,at:Date.now()};
   const result=findReceivingProduct(index,value);setMatch(result);if(result.kind==='found')setRecent(xs=>[result.product,...xs.filter(x=>x.code!==result.product.code)].slice(0,8));input.current?.focus();input.current?.select();
  }
@@ -62,12 +90,15 @@ export default function Receiving({api,admin,visible,stores,store,onStore,previe
  const product=match?.kind==='found'?match.product:null,planned=product?isProductPlanned(product):false;
  const locationValues=(field:'family'|'aisle')=>product?[...new Set(product.locations.map(l=>l[field]).filter(v=>!isUnplanned(v)))].join(' · '):'';
  return <section className="rx-workspace" aria-label="Ubicación de mercancía">
-  <div className="rx-toolbar"><label className="rx-store-label"><FolderOpen size={17}/> Tienda<select aria-label="Tienda de ubicación de mercancía" value={stores.some(s=>s.id===store?.id)?store!.id:''} onChange={e=>onStore(stores.find(s=>s.id===e.target.value)||null)}><option value="">Selecciona una tienda</option>{stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><button type="button" className="secondary" disabled={!store||!!phase||preview} onClick={()=>{cached.current=null;setReload(n=>n+1);}}><RefreshCw size={16}/>Actualizar base</button></div>
+  <div className="rx-toolbar"><label className="rx-store-label"><FolderOpen size={17}/> Tienda<select aria-label="Tienda de ubicación de mercancía" disabled={uploading} value={stores.some(s=>s.id===store?.id)?store!.id:''} onChange={e=>onStore(stores.find(s=>s.id===e.target.value)||null)}><option value="">Selecciona una tienda</option>{stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><div className="rx-toolbar-actions">{admin&&<><input ref={fileInput} type="file" accept=".xlsx" hidden onChange={e=>void uploadBase(e.target.files?.[0])}/><button type="button" className="primary" disabled={!store||!!phase||uploading||preview||!replaceBase} title={!replaceBase?'Falta activar la actualización de la API':undefined} onClick={()=>fileInput.current?.click()}><Upload size={16}/>{uploading?'Subiendo '+uploadProgress+'%':'Subir nueva base'}</button></>}<button type="button" className="secondary" disabled={!store||!!phase||preview||uploading} onClick={()=>{cached.current=null;setReload(n=>n+1);}}><RefreshCw size={16}/>Actualizar base</button></div></div>
+  {message&&<p className="rx-note" role="status">{message}</p>}
+  {watchError&&<div className="rx-alert" role="alert">{watchError}</div>}
+  {liveDocuments&&<small className="rx-auto-status">Actualización automática activa · se comprueban cambios cada 20 segundos y al volver a esta pantalla.</small>}
   {preview&&<p className="rx-note">La vista de diseño no consulta productos reales. Inicia sesión para abrir la base autorizada de tu tienda.</p>}
   {phase&&<div className="rx-loading" role="status"><LoaderCircle className="spin" size={24}/><div><strong>Preparando recepción</strong><p>{phase}</p></div></div>}
   {error&&<div className="rx-alert" role="alert"><AlertTriangle size={21}/><div><strong>No se pudo cargar la base</strong><p>{error}</p></div></div>}
   <form className="rx-search-panel" onSubmit={e=>{e.preventDefault();lookup();}}><div className="rx-search-title"><span className="rx-scan-icon"><ScanLine size={27}/></span><div><h2>¿A dónde va este producto?</h2><p>Escanea el código de barras o escribe el código de producto Truper.</p></div>{index&&<span className="rx-ready"><i/>Lector listo</span>}</div>
-   <label htmlFor="rx-code">Código de barras o código de producto</label><div className="rx-input-line"><ScanLine size={22} aria-hidden="true"/><input id="rx-code" ref={input} type="text" inputMode="numeric" autoComplete="off" spellCheck={false} maxLength={48} value={query} disabled={!index||!!phase} onChange={e=>setQuery(e.target.value)} placeholder="Escanea aquí o escribe el código"/><button className="primary" disabled={!index||!!phase||!query.trim()}><Search size={18}/>Buscar</button></div>
+   <label htmlFor="rx-code">Código de barras o código de producto</label><div className="rx-input-line"><ScanLine size={22} aria-hidden="true"/><input id="rx-code" ref={input} type="text" inputMode="numeric" autoComplete="off" spellCheck={false} maxLength={48} value={query} disabled={!index||!!phase||uploading||!!watchError} onChange={e=>setQuery(e.target.value)} placeholder="Escanea aquí o escribe el código"/><button className="primary" disabled={!index||!!phase||uploading||!!watchError||!query.trim()}><Search size={18}/>Buscar</button></div>
    <div className="rx-search-foot"><span>Lectores USB o Bluetooth: escanea con este campo activo. También puedes escribir y pulsar Enter.</span>{query&&<button type="button" className="text-link" onClick={()=>{setQuery('');setMatch(null);input.current?.focus();}}>Limpiar</button>}</div>
   </form>
   <div aria-live="polite" aria-atomic="false">
