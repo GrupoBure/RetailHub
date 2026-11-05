@@ -46,6 +46,7 @@ export default function Graphics({api,canManage}:{api:Api;canManage:boolean}){
  useEffect(()=>{const c=new AbortController();ref.current('graphics',{signal:c.signal}).then(d=>{if(!c.signal.aborted){setItems(d.graphics.map(catalogGraphic));setLabels(d.labels||{});setRealFolders(d.folders||[]);}}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});return()=>c.abort();},[]);
  useEffect(()=>{
   if(!selected)return;
+  setLink(null);setFileError('');
   const c=new AbortController();let url='';
   dialog.current?.showModal();
   ref.current('graphics/original',{method:'POST',body:JSON.stringify({id:selected.id}),signal:c.signal}).then((blob:Blob)=>{
