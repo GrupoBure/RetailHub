@@ -1,0 +1,34 @@
+name: Verificar compilación de Biblioteca
+on:
+  push:
+    paths:
+      - 'BibliotecaPlanog/source/**'
+      - '.github/workflows/biblioteca-check.yml'
+  pull_request:
+    paths:
+      - 'BibliotecaPlanog/source/**'
+      - '.github/workflows/biblioteca-check.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: BibliotecaPlanog/source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm run build
+      - name: Revisar archivos de salida
+        run: |
+          test -s dist/index.html
+          test -n "$(find dist/assets -name 'index-*.js' -type f -print -quit)"
+          find dist -type f | sort
