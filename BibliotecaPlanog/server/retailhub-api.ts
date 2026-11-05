@@ -449,6 +449,20 @@ function graphicFile(e:any){return e?.['.tag']==='file'&&typeof e.name==='string
 async function graphicsRoutes(r:Request,p:string[],user:any){
  if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user)});
  if(!graphicAccess(user))throw new PortalError(403,'No tienes acceso a Gráficos.');
+ if(r.method==='PATCH'&&p.length===2&&p[1]==='group'){
+  membership(user,true);
+  const {group,label,id}=await bodyJSON(r,4096);
+  if(typeof group!=='string'||group.length>1024)throw new PortalError(400,'Familia no válida.');
+  if(id!==undefined){
+   if(typeof id!=='string'||!/^id:[A-Za-z0-9_-]+$/.test(id)||!graphicFile(await dbx('files/get_metadata',{path:id})))throw new PortalError(404,'Gráfico no disponible.');
+   const assignments=JSON.parse(await setting('graphics:assignments')||'{}');
+   await setting('graphics:assignments',JSON.stringify({...assignments,[id]:group}));return json({group});
+  }
+  if(typeof label!=='string'||!label.trim()||label.length>100)throw new PortalError(400,'Escribe un nombre de familia válido.');
+  const names=JSON.parse(await setting('graphics:groups')||'{}');
+  await setting('graphics:groups',JSON.stringify({...names,[group]:label.trim()}));
+  return json({label:label.trim()});
+ }
  const rawSpecs=(r.method==='PATCH'||p.length===1)?await setting('graphics:specs'):null;
  const overrides:Record<string,[string,string,number,number]>=rawSpecs?JSON.parse(rawSpecs):{};
  if(r.method==='PATCH'&&p.length===2&&p[1]==='spec'){
@@ -463,17 +477,18 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
  }
  if(r.method==='GET'&&p.length===1){
   const graphics=[];
+  const [labels,assignments]=await Promise.all([setting('graphics:groups'),setting('graphics:assignments')]).then(v=>v.map(x=>JSON.parse(x||'{}')));
   let l=await dbx('files/list_folder',{path:graphicRoot(),recursive:true,limit:500});
   for(;;){
    for(const e of l.entries.filter(graphicFile)){
     const folder=e.path_display.slice(graphicRoot().length+1).split('/').slice(0,-1).join('/');
     const spec=overrides[e.id]||graphicSpecs[e.name.toLowerCase()]||Object.entries(graphicSpecs).find(([k])=>folder.toLowerCase().startsWith(k.toLowerCase()))?.[1];
-    graphics.push({id:e.id,name:e.name,folder,size:e.size,spec});
+    graphics.push({id:e.id,name:e.name,folder,size:e.size,spec,group:assignments[e.id]??folder});
    }
    if(!l.has_more)break;
    l=await dbx('files/list_folder/continue',{cursor:l.cursor});
   }
-  return json({graphics});
+  return json({graphics,labels});
  }
  if(r.method==='POST'&&p.length===2&&p[1]==='original'){
   const {id}=await bodyJSON(r,2048);
