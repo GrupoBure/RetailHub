@@ -449,13 +449,25 @@ function graphicFile(e:any){return e?.['.tag']==='file'&&typeof e.name==='string
 async function graphicsRoutes(r:Request,p:string[],user:any){
  if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user)});
  if(!graphicAccess(user))throw new PortalError(403,'No tienes acceso a Gráficos.');
+ const rawSpecs=(r.method==='PATCH'||p.length===1)?await setting('graphics:specs'):null;
+ const overrides:Record<string,[string,string,number,number]>=rawSpecs?JSON.parse(rawSpecs):{};
+ if(r.method==='PATCH'&&p.length===2&&p[1]==='spec'){
+  membership(user,true);
+  const {id,name,material,width,height}=await bodyJSON(r,4096);
+  if(typeof id!=='string'||!/^id:[A-Za-z0-9_-]+$/.test(id)||typeof name!=='string'||!name.trim()||name.length>160||typeof material!=='string'||!material.trim()||material.length>160||typeof width!=='number'||!Number.isFinite(width)||width<=0||typeof height!=='number'||!Number.isFinite(height)||height<=0)throw new PortalError(400,'Completa nombre, material y medidas positivas.');
+  const e=await dbx('files/get_metadata',{path:id});
+  if(!graphicFile(e))throw new PortalError(404,'Gráfico no disponible.');
+  const spec:[string,string,number,number]=[name.trim(),material.trim(),width,height];
+  await setting('graphics:specs',JSON.stringify({...overrides,[id]:spec}));
+  return json({spec});
+ }
  if(r.method==='GET'&&p.length===1){
   const graphics=[];
   let l=await dbx('files/list_folder',{path:graphicRoot(),recursive:true,limit:500});
   for(;;){
    for(const e of l.entries.filter(graphicFile)){
     const folder=e.path_display.slice(graphicRoot().length+1).split('/').slice(0,-1).join('/');
-    const spec=graphicSpecs[e.name.toLowerCase()]||Object.entries(graphicSpecs).find(([k])=>folder.toLowerCase().startsWith(k.toLowerCase()))?.[1];
+    const spec=overrides[e.id]||graphicSpecs[e.name.toLowerCase()]||Object.entries(graphicSpecs).find(([k])=>folder.toLowerCase().startsWith(k.toLowerCase()))?.[1];
     graphics.push({id:e.id,name:e.name,folder,size:e.size,spec});
    }
    if(!l.has_more)break;
