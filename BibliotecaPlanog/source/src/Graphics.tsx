@@ -22,7 +22,7 @@ export default function Graphics({api,admin}:{api:Api;admin:boolean}){
  const ref=useRef(api);ref.current=api;
  const dialog=useRef<HTMLDialogElement>(null);
  const [items,setItems]=useState<Graphic[]>([]),[query,setQuery]=useState(''),[folder,setFolder]=useState(''),[selected,setSelected]=useState<Graphic|null>(null),[link,setLink]=useState<{url:string;download:string}|null>(null),[error,setError]=useState(''),[fileError,setFileError]=useState(''),[loading,setLoading]=useState(true);
- useEffect(()=>{const c=new AbortController();ref.current('graphics',{signal:c.signal}).then(d=>{if(!c.signal.aborted){setItems(d.graphics);setLabels(d.labels||{});}}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});return()=>c.abort();},[]);
+ useEffect(()=>{const c=new AbortController();ref.current('graphics',{signal:c.signal}).then(d=>{if(!c.signal.aborted){setItems(d.graphics.map((x:Graphic)=>/^FT-Construcci[oó]n(?:\s|$)/i.test(x.folder.split('/')[0])?{...x,spec:[x.spec?.[0]||graphicName(x),'PVC 3 mm',19,7]}:x));setLabels(d.labels||{});}}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});return()=>c.abort();},[]);
  useEffect(()=>{
   if(!selected)return;
   const c=new AbortController();let url='';
