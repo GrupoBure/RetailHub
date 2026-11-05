@@ -531,14 +531,17 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
   throw new PortalError(404,'Operación de subida no válida.');
  }
  const rawSpecs=(r.method==='PATCH'||p.length===1)?await setting('graphics:specs'):null;
- const overrides:Record<string,[string,string,number,number]>=rawSpecs?JSON.parse(rawSpecs):{};
+ const overrides:Record<string,[string,string,number,number,(number|null)?,string?]>=rawSpecs?JSON.parse(rawSpecs):{};
  if(r.method==='PATCH'&&p.length===2&&p[1]==='spec'){
   requireGraphicManager(user);
-  const {id,name,material,width,height}=await bodyJSON(r,4096);
+  const {id,name,material,width,height,quantity,notes}=await bodyJSON(r,4096);
   if(typeof id!=='string'||!/^id:[A-Za-z0-9_-]+$/.test(id)||typeof name!=='string'||!name.trim()||name.length>160||typeof material!=='string'||!material.trim()||material.length>160||typeof width!=='number'||!Number.isFinite(width)||width<=0||typeof height!=='number'||!Number.isFinite(height)||height<=0)throw new PortalError(400,'Completa nombre, material y medidas positivas.');
   const e=await dbx('files/get_metadata',{path:id});
   if(!graphicFile(e))throw new PortalError(404,'Gráfico no disponible.');
-  const spec:[string,string,number,number]=[name.trim(),material.trim(),width,height];
+  if(quantity!==undefined&&quantity!==null&&(!Number.isSafeInteger(quantity)||quantity<1||quantity>10000))throw new PortalError(400,'Indica una cantidad entera positiva de hasta 10000 piezas.');
+  if(notes!==undefined&&(typeof notes!=='string'||notes.length>1000))throw new PortalError(400,'Usa indicaciones de hasta 1000 caracteres.');
+  const previous=overrides[id];
+  const spec:[string,string,number,number,(number|null)?,string?]=[name.trim(),material.trim(),width,height,quantity===undefined?(previous?.[4]??null):quantity,notes===undefined?(previous?.[5]||''):notes.trim()];
   await setting('graphics:specs',JSON.stringify({...overrides,[id]:spec}));
   return json({spec});
  }
