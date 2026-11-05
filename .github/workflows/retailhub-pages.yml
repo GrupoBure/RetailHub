@@ -1,0 +1,98 @@
+name: Publicar Retail Hub
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'CNAME'
+      - 'assets/**'
+      - 'BibliotecaPlanog/config.js'
+      - 'BibliotecaPlanog/assets/**'
+      - 'BibliotecaPlanog/source/**'
+permissions:
+  contents: read
+concurrency:
+  group: retailhub-pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: BibliotecaPlanog/source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm run build
+      - name: Revisar archivos de salida
+        run: |
+          test -s dist/index.html
+          test -n "$(find dist/assets -name 'index-*.js' -type f -print -quit)"
+          find dist -type f | sort
+      - name: Preparar y verificar el sitio completo sin publicar
+        working-directory: .
+        run: |
+          stage="$RUNNER_TEMP/retailhub-preview"
+          mkdir -p "$stage/BibliotecaPlanog/assets"
+          cp index.html CNAME "$stage/"
+          cp -R assets "$stage/"
+          cp BibliotecaPlanog/config.js "$stage/BibliotecaPlanog/"
+          cp -R BibliotecaPlanog/assets/. "$stage/BibliotecaPlanog/assets/"
+          cp -R BibliotecaPlanog/source/dist/. "$stage/BibliotecaPlanog/"
+          test "$(tr -d '\r\n' < "$stage/CNAME")" = retailhub.mx
+          python3 - "$stage" <<'PY'
+          from pathlib import Path
+          from html.parser import HTMLParser
+          from urllib.parse import urlsplit, unquote
+          import sys
+          root = Path(sys.argv[1]).resolve()
+          class Check(HTMLParser):
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  ref = attrs.get('src') if tag in ('script','img') else attrs.get('href') if tag == 'link' else None
+                  if not ref:
+                      return
+                  url = urlsplit(ref)
+                  if not url.path or url.scheme or url.netloc:
+                      return
+                  target = (root / unquote(url.path.lstrip('/')) if url.path.startswith('/') else self.page.parent / unquote(url.path)).resolve()
+                  assert target.is_relative_to(root) and target.is_file(), f'{self.page.name}: archivo faltante: {ref}'
+          for page in (root/'index.html', root/'BibliotecaPlanog/index.html'):
+              parser = Check()
+              parser.page = page
+              parser.feed(page.read_text(encoding='utf-8'))
+          PY
+      - name: Revisar que el paquete no incluya archivos privados
+        run: |
+          stage="$RUNNER_TEMP/retailhub-preview"
+          if find "$stage" -type f \( -name '.env*' -o -iname '*.pem' -o -iname '*.xlsx' -o -iname '*.pptx' -o -iname '*.map' \) | grep -q .; then
+            echo 'El paquete contiene archivos fuera del alcance de publicación.'
+            exit 1
+          fi
+          if grep -rIqE 'sb_secret_[A-Za-z0-9_-]{10,}|BEGIN ([A-Z]+ )?PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}' "$stage"; then
+            echo 'El paquete contiene un patrón de credencial que requiere revisión.'
+            exit 1
+          fi
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/retailhub-preview
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
