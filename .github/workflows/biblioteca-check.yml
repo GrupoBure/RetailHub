@@ -2,10 +2,20 @@ name: Verificar compilación de Biblioteca
 on:
   push:
     paths:
+      - 'index.html'
+      - 'CNAME'
+      - 'assets/**'
+      - 'BibliotecaPlanog/assets/**'
+      - 'BibliotecaPlanog/config.js'
       - 'BibliotecaPlanog/source/**'
       - '.github/workflows/biblioteca-check.yml'
   pull_request:
     paths:
+      - 'index.html'
+      - 'CNAME'
+      - 'assets/**'
+      - 'BibliotecaPlanog/assets/**'
+      - 'BibliotecaPlanog/config.js'
       - 'BibliotecaPlanog/source/**'
       - '.github/workflows/biblioteca-check.yml'
   workflow_dispatch:
