@@ -32,3 +32,36 @@ jobs:
           test -s dist/index.html
           test -n "$(find dist/assets -name 'index-*.js' -type f -print -quit)"
           find dist -type f | sort
+      - name: Preparar y verificar el sitio completo sin publicar
+        working-directory: .
+        run: |
+          stage="$RUNNER_TEMP/retailhub-preview"
+          mkdir -p "$stage/BibliotecaPlanog/assets"
+          cp index.html CNAME "$stage/"
+          cp -R assets "$stage/"
+          cp BibliotecaPlanog/config.js "$stage/BibliotecaPlanog/"
+          cp -R BibliotecaPlanog/assets/. "$stage/BibliotecaPlanog/assets/"
+          cp -R BibliotecaPlanog/source/dist/. "$stage/BibliotecaPlanog/"
+          test "$(tr -d '\r\n' < "$stage/CNAME")" = retailhub.mx
+          python3 - "$stage" <<'PY'
+          from pathlib import Path
+          from html.parser import HTMLParser
+          from urllib.parse import urlsplit, unquote
+          import sys
+          root = Path(sys.argv[1]).resolve()
+          class Check(HTMLParser):
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  ref = attrs.get('src') if tag in ('script','img') else attrs.get('href') if tag == 'link' else None
+                  if not ref:
+                      return
+                  url = urlsplit(ref)
+                  if not url.path or url.scheme or url.netloc:
+                      return
+                  target = (root / unquote(url.path.lstrip('/')) if url.path.startswith('/') else self.page.parent / unquote(url.path)).resolve()
+                  assert target.is_relative_to(root) and target.is_file(), f'{self.page.name}: archivo faltante: {ref}'
+          for page in (root/'index.html', root/'BibliotecaPlanog/index.html'):
+              parser = Check()
+              parser.page = page
+              parser.feed(page.read_text(encoding='utf-8'))
+          PY
