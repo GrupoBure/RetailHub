@@ -68,7 +68,7 @@ export async function requireUser(r:Request,admin=false){
  const t=bearer(r);if(!t)throw new PortalError(401,'Inicia sesión para continuar.');
  return membership(await supa('/auth/v1/user',{},t),admin);
 }
-export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,graphics_access:graphicAccess(u),last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),exhibit_store_ids:exhibitStoreIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
+export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,graphics_access:graphicAccess(u),graphics_manage:canManageGraphics(u),last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),exhibit_store_ids:exhibitStoreIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
 export function username(v:unknown){if(typeof v!=='string'||!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(v.toLowerCase()))throw new PortalError(400,'Usa de 3 a 40 letras sin acentos, números, puntos o guiones para el usuario.');return v.toLowerCase();}
 const email=(v:unknown)=>username(v)+'@usuarios.retailhub.invalid';
 export {email};
@@ -465,13 +465,15 @@ const accessoryAsset=(v:unknown)=>typeof v==='string'&&/^[a-f0-9-]{36}\.(?:pdf|j
 const graphicSpecs:Record<string,[string,string,number,number]>={"Bombas Andrew BM-G": ["FichasTecnicasControlesBombasP", "PVC 3ml", 15, 9], "Gatos y torres": ["FichasGatosHidraulicos", "PVC 3ml", 14, 9], "Mallas Andrew": ["FichasTecnicasMayas", "PVC 3ml", 11, 16.5], "Desbozadoras": ["FichasTecnicasDesmalezadorasyD", "PVC 3ml", 17.5, 30], "fichas supermaq3": ["FichasTecnicasSupermaqDobles", "PVC 3ml", 14.5, 14.5], "fichas supermaq": ["FichasTecnicasSupermaq", "PVC 3ml", 9.5, 14.5], "Aspiradoras": ["FichasAspira", "PVC 3ml", 22, 15], "Lijadoras-cepillos": ["FichasLijaCepilloSierraInglete", "PVC 3ml", 20, 12], "PASILLOS": ["Indicadores de pasillo", "PVC 3ml", 30, 36], "Poliuretano": ["FichaPoliuretano", "PVC 3ml", 39, 7], "Sopladoras y cortadoras": ["FichaSopladora", "PVC 3ml", 29, 17.5], "Bombas sumergibles": ["FichasTecnicasBombasSumEhidro", "PVC 3ml", 10, 15], "Lonas Andrew": ["FichasTecnicasLonas", "PVC 3ml", 7.5, 30], "Inversores": ["FichasInversores", "PVC 3ml", 12, 12], "Tanques de gas": ["FichastecnicasTanquesGas", "Iman 1 ml", 15, 20], "mallas1-109x42.jpg": ["Mallas1", "Estireno 1 ml", 120, 42], "mallas2-119x67.jpg": ["Mallas2", "Estireno 1 ml", 120, 67], "calentadores-86.50x15.5.jpg": ["CalentadorAltoValor", "Estireno 1 ml", 80, 15.5], "horario.jpg": ["Horario", "Recorte de Vinil para vidrio 2 colores", 29, 29], "abierto.jpg": ["Abierto/Cerrado", "Estireno 1 ml impreso ambos lados", 28, 21], "cerrado.jpg": ["Abierto/Cerrado", "Estireno 1 ml impreso ambos lados", 28, 21], "metodosdepago.jpg": ["Metodosdepago", "Estireno 1 ml", 30, 40], "precaucion-supermaq.jpg": ["precaucion smaq", "PVC 3ml", 40.5, 5]};
 const graphicExt=/\.(jpe?g|png|psd|pdf)$/i;
 function graphicRoot(){return config().root.replace(/\/[^/]+$/,'')+'/Gráficos';}
-function graphicAccess(user:any){return user.app_metadata?.role==='admin'||(user.app_metadata?.graphics_access??String(env.RH_GRAPHICS_READERS||'').split(',').some(id=>id.trim()===user.id))===true;}
+function canManageGraphics(user:any){return user.app_metadata?.role==='admin'||user.app_metadata?.graphics_manage===true;}
+function requireGraphicManager(user:any){if(!canManageGraphics(user))throw new PortalError(403,'No tienes permiso para administrar gráficos.');}
+function graphicAccess(user:any){return canManageGraphics(user)||(user.app_metadata?.graphics_access??String(env.RH_GRAPHICS_READERS||'').split(',').some(id=>id.trim()===user.id))===true;}
 function graphicFile(e:any){return e?.['.tag']==='file'&&typeof e.name==='string'&&graphicExt.test(e.name)&&typeof e.path_lower==='string'&&e.path_lower.startsWith(graphicRoot().toLowerCase()+'/')&&!e.path_lower.split('/').includes('guías de impresión');}
 async function graphicsRoutes(r:Request,p:string[],user:any){
- if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user)});
+ if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user),manage:canManageGraphics(user)});
  if(!graphicAccess(user))throw new PortalError(403,'No tienes acceso a Gráficos.');
  if(r.method==='PATCH'&&p.length===2&&p[1]==='group'){
-  membership(user,true);
+  requireGraphicManager(user);
   const {group,label,id}=await bodyJSON(r,4096);
   if(typeof group!=='string'||group.length>1024)throw new PortalError(400,'Familia no válida.');
   if(id!==undefined){
@@ -484,10 +486,54 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
   await setting('graphics:groups',JSON.stringify({...names,[group]:label.trim()}));
   return json({label:label.trim()});
  }
+ if(r.method==='DELETE'&&p.length===2){
+  requireGraphicManager(user);const b=await bodyJSON(r,2048);const id=decodeURIComponent(p[1]);
+  if(!/^id:[A-Za-z0-9_-]+$/.test(id))throw new PortalError(404,'Gráfico no disponible.');
+  const file=await dbx('files/get_metadata',{path:id});if(!graphicFile(file))throw new PortalError(404,'Gráfico no disponible.');
+  if(b.confirm_filename!==file.name||typeof b.revision!=='string'||b.revision!==file.rev)throw new PortalError(409,'El gráfico cambió. Actualiza antes de eliminarlo.');
+  await dbx('files/delete_v2',{path:file.id,parent_rev:file.rev});return json({ok:true});
+ }
+ if(p[1]==='upload'&&r.method==='POST'){
+  requireGraphicManager(user);
+  if(p[2]==='start'){
+   const b=await bodyJSON(r,4096),size=Number(b.size);let filename=String(b.filename||'').normalize('NFC'),folder=String(b.folder||'').normalize('NFC'),replaceId:string|undefined,replaceRevision:string|undefined;
+   if(!Number.isSafeInteger(size)||size<=0||size>500*1024*1024)throw new PortalError(413,'Selecciona un original de hasta 500 MB.');
+   if(b.replace_id){
+    const file=await dbx('files/get_metadata',{path:String(b.replace_id)});if(!graphicFile(file))throw new PortalError(404,'Gráfico no disponible.');
+    if(typeof b.revision!=='string'||b.revision!==file.rev)throw new PortalError(409,'El gráfico cambió. Actualiza antes de reemplazarlo.');
+    if(filename.split('.').at(-1)?.toLowerCase().replace('jpeg','jpg')!==file.name.split('.').at(-1)?.toLowerCase().replace('jpeg','jpg'))throw new PortalError(400,'El reemplazo debe conservar el formato del original.');
+    filename=file.name;folder=file.path_display.slice(graphicRoot().length+1).split('/').slice(0,-1).join('/');replaceId=file.id;replaceRevision=file.rev;
+   }
+   if(!filename||filename.length>180||/[\/\\\u0000-\u001f]/.test(filename)||!graphicExt.test(filename))throw new PortalError(400,'Usa un archivo JPG, PNG, PSD o PDF con un nombre válido.');
+   if(!folder||folder.length>1000||folder.split('/').some((part:string)=>!part||part==='.'||part==='..'||part.toLowerCase()==='guías de impresión'||/[\\\u0000-\u001f]/.test(part)))throw new PortalError(400,'Selecciona una carpeta válida para el gráfico.');
+   const parent=await dbx('files/get_metadata',{path:graphicRoot()+'/'+folder});if(parent['.tag']!=='folder'||String(parent.path_lower)!==(graphicRoot()+'/'+folder).toLowerCase())throw new PortalError(404,'La carpeta ya no está disponible.');
+   const response=await content('files/upload_session/start',{close:false},new Uint8Array()),session=await response.json();
+   const ticket=await seal('graphics-upload',{uid:user.id,sid:session.session_id,path:parent.path_display+'/'+filename,folder,size,replaceId,replaceRevision,expires:Date.now()+3600000});return json({ticket});
+  }
+  if(p[2]==='chunk'||p[2]==='finish'){
+   const ticket=r.headers.get('X-Upload-Ticket');if(!ticket)throw new PortalError(400,'Falta la sesión de subida.');const t=await unseal('graphics-upload',ticket);
+   if(t.uid!==user.id)throw new PortalError(403,'La subida pertenece a otra cuenta.');
+   const offset=Number(r.headers.get('X-Upload-Offset'));if(!Number.isSafeInteger(offset)||offset<0||offset>t.size)throw new PortalError(400,'Posición de subida no válida.');
+   if(!String(t.path).startsWith(graphicRoot()+'/'))throw new PortalError(403,'El destino de gráficos cambió. Inicia otra vez la subida.');
+   const bytes=await bounded(r,4*1024*1024);if(offset+bytes.length>t.size)throw new PortalError(413,'El archivo supera el tamaño indicado.');
+   if(offset===0&&bytes.length){
+    const ext=String(t.path).split('.').at(-1)!.toLowerCase();const head=new TextDecoder().decode(bytes.slice(0,8));
+    const valid=ext==='pdf'?head.startsWith('%PDF-'):ext==='psd'?head.startsWith('8BPS'):ext==='png'?[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v):bytes[0]===255&&bytes[1]===216&&bytes[2]===255;
+    if(!valid)throw new PortalError(400,'El contenido no corresponde al formato del archivo.');
+   }
+   if(p[2]==='chunk'){if(!bytes.length)throw new PortalError(400,'Bloque vacío.');await content('files/upload_session/append_v2',{cursor:{session_id:t.sid,offset},close:false},bytes);return json({ok:true});}
+   if(bytes.length||offset!==t.size)throw new PortalError(400,'La subida todavía no está completa.');
+   const parentPath=String(t.path).slice(0,String(t.path).lastIndexOf('/'));const parent=await dbx('files/get_metadata',{path:parentPath});if(parent['.tag']!=='folder'||parent.path_lower!==parentPath.toLowerCase())throw new PortalError(409,'La carpeta cambió durante la subida.');
+   if(t.replaceId){const current=await dbx('files/get_metadata',{path:t.replaceId});if(!graphicFile(current)||current.rev!==t.replaceRevision||current.path_lower!==String(t.path).toLowerCase())throw new PortalError(409,'Otro usuario modificó el gráfico. Actualiza antes de reemplazarlo.');}
+   const response=await content('files/upload_session/finish',{cursor:{session_id:t.sid,offset},commit:{path:t.path,mode:t.replaceRevision?{'.tag':'update',update:t.replaceRevision}:'add',autorename:false,mute:false,strict_conflict:true}},bytes),file=await response.json();
+   return json({graphic:{id:file.id,name:file.name,folder:t.folder,group:t.folder,size:file.size,revision:file.rev}});
+  }
+  throw new PortalError(404,'Operación de subida no válida.');
+ }
  const rawSpecs=(r.method==='PATCH'||p.length===1)?await setting('graphics:specs'):null;
  const overrides:Record<string,[string,string,number,number]>=rawSpecs?JSON.parse(rawSpecs):{};
  if(r.method==='PATCH'&&p.length===2&&p[1]==='spec'){
-  membership(user,true);
+  requireGraphicManager(user);
   const {id,name,material,width,height}=await bodyJSON(r,4096);
   if(typeof id!=='string'||!/^id:[A-Za-z0-9_-]+$/.test(id)||typeof name!=='string'||!name.trim()||name.length>160||typeof material!=='string'||!material.trim()||material.length>160||typeof width!=='number'||!Number.isFinite(width)||width<=0||typeof height!=='number'||!Number.isFinite(height)||height<=0)throw new PortalError(400,'Completa nombre, material y medidas positivas.');
   const e=await dbx('files/get_metadata',{path:id});
@@ -497,19 +543,20 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
   return json({spec});
  }
  if(r.method==='GET'&&p.length===1){
-  const graphics=[];
+  const graphics=[],folders:string[]=[];
   const [labels,assignments]=await Promise.all([setting('graphics:groups'),setting('graphics:assignments')]).then(v=>v.map(x=>JSON.parse(x||'{}')));
   let l=await dbx('files/list_folder',{path:graphicRoot(),recursive:true,limit:500});
   for(;;){
+   for(const e of l.entries)if(e['.tag']==='folder'&&String(e.path_lower).startsWith(graphicRoot().toLowerCase()+'/')&&!String(e.path_lower).split('/').includes('guías de impresión'))folders.push(e.path_display.slice(graphicRoot().length+1));
    for(const e of l.entries.filter(graphicFile)){
     const folder=e.path_display.slice(graphicRoot().length+1).split('/').slice(0,-1).join('/');
     const spec=overrides[e.id]||graphicSpecs[e.name.toLowerCase()]||Object.entries(graphicSpecs).find(([k])=>folder.toLowerCase().startsWith(k.toLowerCase()))?.[1];
-    graphics.push({id:e.id,name:e.name,folder,size:e.size,spec,group:assignments[e.id]??folder});
+    graphics.push({id:e.id,name:e.name,folder,size:e.size,revision:e.rev,spec,group:assignments[e.id]??folder});
    }
    if(!l.has_more)break;
    l=await dbx('files/list_folder/continue',{cursor:l.cursor});
   }
-  return json({graphics,labels});
+  return json({graphics,labels,folders});
  }
  if(r.method==='POST'&&p.length===2&&p[1]==='original'){
   const {id}=await bodyJSON(r,2048);
@@ -633,7 +680,7 @@ async function handleRequest(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{liveDocuments:true,replaceReceivingBase:true,graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{graphicsManagement:true,liveDocuments:true,replaceReceivingBase:true,graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -924,7 +971,7 @@ async function handleRequest(r:Request){
  return json({users:all.filter(u=>u.app_metadata?.rh_portal).map(safeUser)});}
  if(route==='users'&&method==='POST'){
  const b:any=await bodyJSON(r);const assignedStores=await validateStoreIds(b.store_ids??[]);const quotePermissions=await validateQuotePermissions(b);if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'La contraseña debe tener entre 12 y 256 caracteres.');
- const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,graphics_access:b.graphics_access===true,...quotePermissions,exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids??[]),store_ids:assignedStores}})});
+ const u=await supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email:email(b.username),password:b.password,email_confirm:true,user_metadata:{name:String(b.name||b.username).slice(0,100)},app_metadata:{rh_portal:true,role:b.role==='admin'?'admin':'reader',disabled:false,graphics_access:b.graphics_access===true||b.graphics_manage===true,graphics_manage:b.graphics_manage===true,...quotePermissions,exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids??[]),store_ids:assignedStores}})});
  return json({user:safeUser(u)},201);}
  if(p[0]==='users'&&p.length===2&&(method==='PATCH'||method==='DELETE')){
  if(!/^[a-f0-9-]{36}$/.test(p[1]))throw new PortalError(404,'Usuario no encontrado.');
@@ -942,7 +989,8 @@ async function handleRequest(r:Request){
  if(b.store_ids!==undefined)changes.app_metadata={...target.app_metadata,store_ids:await validateStoreIds(b.store_ids)};
  if(b.quote_view_store_ids!==undefined||b.quote_approve_store_ids!==undefined||b.quote_approval!==undefined){changes.app_metadata={...(changes.app_metadata||target.app_metadata),...await validateQuotePermissions(b,target.app_metadata)};}
  if(b.exhibit_store_ids!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),exhibit_store_ids:await validateStoreIds(b.exhibit_store_ids)};
- if(b.graphics_access!==undefined){if(typeof b.graphics_access!=='boolean')throw new PortalError(400,'Permiso de Gráficos no válido.');changes.app_metadata={...(changes.app_metadata||target.app_metadata),graphics_access:b.graphics_access};}
+ if(b.graphics_access!==undefined){if(typeof b.graphics_access!=='boolean')throw new PortalError(400,'Permiso de Gráficos no válido.');changes.app_metadata={...(changes.app_metadata||target.app_metadata),graphics_access:b.graphics_access,...(!b.graphics_access?{graphics_manage:false}:{})};}
+ if(b.graphics_manage!==undefined){if(typeof b.graphics_manage!=='boolean')throw new PortalError(400,'Permiso de administración de gráficos no válido.');changes.app_metadata={...(changes.app_metadata||target.app_metadata),graphics_manage:b.graphics_manage,...(b.graphics_manage?{graphics_access:true}:{})};}
  if(typeof b.enabled==='boolean'||b.role!==undefined)changes.app_metadata={...(changes.app_metadata||target.app_metadata),...(typeof b.enabled==='boolean'?{disabled:!b.enabled}:{}),...(b.role!==undefined?{role:b.role}:{})};
  if(b.password!==undefined){if(typeof b.password!=='string'||b.password.length<12||b.password.length>256)throw new PortalError(400,'Usa una contraseña de entre 12 y 256 caracteres.');changes.password=b.password;}
  if(!Object.keys(changes).length)throw new PortalError(400,'No hay cambios para guardar.');

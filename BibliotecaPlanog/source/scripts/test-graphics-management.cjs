@@ -1,0 +1,31 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict'),ts=require('typescript');
+const source=fs.readFileSync(path.join(__dirname,'../../server/retailhub-api.ts'),'utf8');
+const code=ts.transpileModule(source+`\nexport const routesForTest=graphicsRoutes;export function configureGraphicsTest(m:any){dbx=m.dbx;content=m.content;setting=m.setting;seal=m.seal;unseal=m.unseal;supa=m.supa;} `,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const env={exports:{},Deno:{env:{get:k=>k==='RH_DROPBOX_ROOT'?'/Retail Hub/Portal':undefined},serve:()=>{}},Request,Response,Headers,URL,URLSearchParams,TextEncoder,TextDecoder,AbortSignal,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout};vm.createContext(env);vm.runInContext(code,env);const a=env.exports;
+const reader={id:'read',app_metadata:{rh_portal:true,role:'reader',graphics_access:true}},manager={id:'manager',app_metadata:{rh_portal:true,role:'reader',graphics_manage:true}},admin={id:'admin',app_metadata:{rh_portal:true,role:'admin'}};
+const root='/Retail Hub/Gráficos',folder='FT-Pruebas';let calls=[],ticket={},liveUser=reader,meta={'.tag':'file',id:'id:graphic',name:'prueba.jpg',path_display:root+'/'+folder+'/prueba.jpg',path_lower:(root+'/'+folder+'/prueba.jpg').toLowerCase(),rev:'r1',size:3};
+const mocks={setting:async()=>null,supa:async()=>liveUser,seal:async(type,v)=>{ticket={...v,type};return'ticket'},unseal:async(type)=>{assert.equal(ticket.type,type);return ticket},dbx:async(p,args)=>{calls.push({p,args});if(p==='files/get_metadata')return args.path===root+'/'+folder||args.path===(root+'/'+folder).toLowerCase()?{'.tag':'folder',path_display:root+'/'+folder,path_lower:(root+'/'+folder).toLowerCase()}:meta;if(p==='files/list_folder')return{entries:[],has_more:false};return{}},content:async(p,args,body)=>{calls.push({p,args,body});return new Response(JSON.stringify(p.endsWith('/start')?{session_id:'sid'}:meta))}};a.configureGraphicsTest(mocks);
+function request(p,method='POST',body={},headers={}){return new Request('https://example.test/functions/v1/retailhub-api/'+p,{method,headers:{authorization:'Bearer test','content-type':'application/json',...headers},...(method==='GET'?{}:{body:body instanceof Uint8Array?body:JSON.stringify(body)})})}
+const route=(p,m,b,u=manager,h={})=>a.routesForTest(request(p,m,b,h),p.split('/'),u);
+(async()=>{
+ for(const [p,m,b]of[['graphics/group','PATCH',{group:folder,label:'x'}],['graphics/spec','PATCH',{}],['graphics/id:graphic','DELETE',{}],['graphics/upload/start','POST',{}],['graphics/upload/chunk','POST',{}],['graphics/upload/finish','POST',{}]]){calls=[];await assert.rejects(()=>route(p,m,b,reader),e=>e.status===403);assert.equal(calls.length,0,'No provider changes for readers');}
+ let response=await route('graphics/access','GET',{},manager);assert.deepEqual(await response.json(),{allowed:true,manage:true});
+ response=await route('graphics/access','GET',{},reader);assert.deepEqual(await response.json(),{allowed:true,manage:false});
+ assert.equal(a.safeUser(manager).graphics_manage,true);assert.equal(a.safeUser(reader).graphics_manage,false);
+ // A graphic manager cannot grant permissions or become a portal administrator.
+ liveUser=manager;response=await a.handle(request('users/11111111-1111-4111-8111-111111111111','PATCH',{role:'admin',graphics_manage:true}));assert.equal(response.status,403);
+ calls=[];await assert.rejects(()=>route('graphics/id:graphic','DELETE',{confirm_filename:'prueba.jpg',revision:'old'}),e=>e.status===409);assert(!calls.some(x=>x.p==='files/delete_v2'));
+ await route('graphics/id:graphic','DELETE',{confirm_filename:'prueba.jpg',revision:'r1'});assert.equal(calls.find(x=>x.p==='files/delete_v2').args.parent_rev,'r1');
+ const saved=meta;meta={...meta,path_lower:'/retail hub/portal/private/prueba.jpg'};await assert.rejects(()=>route('graphics/id:graphic','DELETE',{confirm_filename:'prueba.jpg',revision:'r1'}),e=>e.status===404);meta=saved;
+ await assert.rejects(()=>route('graphics/upload/start','POST',{filename:'prueba.jpg',size:3,folder:'../Portal'}),e=>e.status===400);
+ await assert.rejects(()=>route('graphics/upload/start','POST',{filename:'prueba.jpg',size:3,replace_id:meta.id,revision:'old'}),e=>e.status===409);
+ calls=[];await route('graphics/upload/start','POST',{filename:'new.jpg',size:3,replace_id:meta.id,revision:'r1'});assert.equal(ticket.replaceRevision,'r1');assert.equal(ticket.uid,manager.id);
+ const headers={'X-Upload-Ticket':'ticket','X-Upload-Offset':'0','content-type':'application/octet-stream'};
+ await assert.rejects(()=>route('graphics/upload/chunk','POST',new Uint8Array([0,0,0]),manager,headers),e=>e.status===400);
+ await route('graphics/upload/chunk','POST',new Uint8Array([255,216,255]),manager,headers);const appended=calls.find(x=>x.p==='files/upload_session/append_v2');assert.deepEqual([...appended.body],[255,216,255],'Upload bytes are unchanged');
+ await assert.rejects(()=>route('graphics/upload/finish','POST',new Uint8Array(),manager,{...headers,'X-Upload-Offset':'2'}),e=>e.status===400);
+ meta={...meta,rev:'r2'};await assert.rejects(()=>route('graphics/upload/finish','POST',new Uint8Array(),manager,{...headers,'X-Upload-Offset':'3'}),e=>e.status===409);meta=saved;
+ await route('graphics/upload/finish','POST',new Uint8Array(),manager,{...headers,'X-Upload-Offset':'3'});const finished=calls.find(x=>x.p==='files/upload_session/finish');assert.equal(finished.args.commit.mode.update,'r1');assert.equal(finished.args.commit.autorename,false);
+ const session=ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/portal-session.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;const c={exports:{}};vm.createContext(c);vm.runInContext(session,c);const u={id:'1',name:'Test',username:'test',role:'reader',enabled:true,graphics_access:true,graphics_manage:false};assert.notEqual(c.exports.portalAccessKey(u),c.exports.portalAccessKey({...u,graphics_manage:true}));assert.notEqual(c.exports.retainPortalIdentity(u,{...u,graphics_manage:true}),u);
+ console.log('PASS: read-only denial, delegated permissions, no admin escalation, scoped deletion, version conflicts, file signatures, unchanged bytes and live permission refresh.');
+})().catch(e=>{console.error(e);process.exitCode=1});
