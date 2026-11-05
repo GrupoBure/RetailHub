@@ -1,6 +1,7 @@
+import GraphicThumbnail from './GraphicThumbnail';
 import GraphicPdfPreview from './GraphicPdfPreview';
 import {useEffect,useRef,useState} from 'react';
-import {Upload,Trash2,RefreshCw,Download,Image,Search,X} from 'lucide-react';
+import {Upload,Trash2,RefreshCw,Download,Image,Search,X,LayoutGrid,List} from 'lucide-react';
 type Graphic={id:string;name:string;folder:string;group?:string;size:number;revision?:string;spec?:GraphicSpec};
 type Api=(path:string,init?:RequestInit)=>Promise<any>;
 const titles:Record<string,string>={'Desbozadoras':'Desbrozadoras','fichas diablos':'Diablos','fichas supermaq':'Super Maq 1','fichas supermaq 2':'Super Maq 2','fichas supermaq3':'Super Maq 3','PASILLOS':'Indicadores de pasillo','Lijadoras-cepillos y sierras':'Lijadoras, cepillos y sierras','Hidro y aire':'Compresores e hidrolavadoras'};
@@ -94,10 +95,13 @@ export default function Graphics({api,canManage,requestUpload=false,onUploadOpen
    setBatch(done+' originales descargados.');
   }catch(e){setBatch((e as Error).name==='AbortError'&&!done?'Descarga cancelada.':done+' de '+items.length+' descargados. '+(e as Error).message);}finally{setBatchBusy(false);}
  }
- const groups=[...new Set([...Object.keys(finalFolderSpecs),...items.flatMap(x=>[x.folder,groupOf(x)])])].sort((a,b)=>a.localeCompare(b,'es'));
+ const [gallery,setGallery]=useState(false);
+ const groups=[...new Set([...realFolders,...Object.keys(labels),...Object.keys(finalFolderSpecs),...items.flatMap(x=>[x.folder,groupOf(x)])])].sort((a,b)=>a.localeCompare(b,'es'));
  const norm=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
- const catalogItems=items.filter(x=>!(catalogKey(x.folder)==='inf-abierto-cerrado'&&/^cerrado\./i.test(x.name)&&items.some(y=>y.folder===x.folder&&/^abierto\./i.test(y.name))));
- const shown=catalogItems.filter(x=>(!folder||groupOf(x)===folder)&&norm([x.name,groupName(groupOf(x)),x.spec?.[0]].join(' ')).includes(norm(query)));
+ const catalogItems=items.filter(x=>gallery||!(catalogKey(x.folder)==='inf-abierto-cerrado'&&/^cerrado\./i.test(x.name)&&items.some(y=>y.folder===x.folder&&/^abierto\./i.test(y.name))));
+ const shown=catalogItems.filter(x=>(!folder||groupOf(x)===folder)&&norm([x.name,groupOf(x),groupName(groupOf(x)),x.spec?.[0]].join(' ')).includes(norm(query))).sort((a,b)=>(a.spec?.[2]??Infinity)-(b.spec?.[2]??Infinity)||(a.spec?.[3]??Infinity)-(b.spec?.[3]??Infinity)||graphicName(a).localeCompare(graphicName(b),'es',{numeric:true}));
+ const visibleGroups=groups.filter(g=>(!folder||g===folder)&&(!norm(query)||norm(g+' '+groupName(g)).includes(norm(query))||shown.some(x=>groupOf(x)===g)));
+ function measureLabel(x:Graphic){return hasDimensions(x.spec)?`${x.spec![2]} × ${x.spec![3]} cm`:'Sin medidas indicadas';}
  function open(x:Graphic){setLink(null);setFileError('');setDraft(null);setPendingDelete(false);setAssetError('');setEditError('');setSelected(x);}
  function specs(x:Graphic){return x.spec?<><strong>{hasDimensions(x.spec)?`${x.spec[2]} × ${x.spec[3]} cm`:'Medidas no indicadas en el Excel'}</strong><span> · {x.spec[1].replace(/(\d)\s*ml\b/gi,'$1 mm')}</span></>:<span>Especificaciones por confirmar</span>;}
  return <section className="ex-workspace"><div className="ex-top"><label><Search size={16}/> Buscar gráfico<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Nombre, código o familia"/></label><label>Familia<select value={folder} onChange={e=>setFolder(e.target.value)}><option value="">Todas</option>{groups.map(g=><option key={g} value={g}>{groupName(g)}</option>)}</select></label></div>
@@ -107,7 +111,10 @@ export default function Graphics({api,canManage,requestUpload=false,onUploadOpen
  <button className="primary" disabled={batchBusy||!items.length} onClick={downloadAll}><Download size={17}/> Descargar todos los originales</button>{batch&&<p role="status">{batch}</p>}
  {groupError&&<p role="alert">{groupError}</p>}
  {loading?<p role="status">Cargando gráficos…</p>:error?<p className="error-banner" role="alert">{error}</p>:<p>{shown.length} gráficos</p>}
- {groups.filter(g=>(!folder||g===folder)&&(!query||shown.some(x=>groupOf(x)===g))).map(g=><section key={g} className="ex-notes"><h2>{groupName(g)}</h2>{canManage&&<button className="secondary" disabled={groupBusy||assetBusy} onClick={()=>changeGroup(g)}>Renombrar familia</button>}{!items.some(x=>groupOf(x)===g)&&<p>Sin gráficos por ahora.</p>}<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(min(100%,235px),1fr))',gap:10}}>{shown.filter(x=>groupOf(x)===g).map(x=><button key={x.id} className="secondary" style={{display:'grid',justifyItems:'start',textAlign:'left',whiteSpace:'normal',padding:14}} onClick={()=>open(x)}><Image size={22}/><strong>{catalogKey(x.folder)==='inf-abierto-cerrado'?'Abierto / Cerrado · dos caras':graphicName(x)}</strong><span>{specs(x)}</span></button>)}</div></section>)}
+ <div className="graphics-view-controls" aria-label="Vista de gráficos"><button className={gallery?'secondary':'primary'} aria-pressed={!gallery} onClick={()=>setGallery(false)}><List size={17}/> Lista por medidas</button><button className={gallery?'primary':'secondary'} aria-pressed={gallery} onClick={()=>setGallery(true)}><LayoutGrid size={17}/> Vista conjunta</button><span>Orden: ancho y después alto, de menor a mayor.</span></div>
+ {gallery&&<p>Vista de revisión: imágenes y primera página de cada PDF. Haz clic para ampliar y consultar la ficha completa. Respeta la familia y la búsqueda seleccionadas.</p>}
+ {!loading&&!error&&!visibleGroups.length&&<p>No hay familias ni gráficos que coincidan con la búsqueda.</p>}
+ {visibleGroups.map(g=>{const entries=shown.filter(x=>groupOf(x)===g),measures=[...new Set(entries.map(measureLabel))];return <section key={g} className="ex-notes"><h2>{groupName(g)} <small>({entries.length})</small></h2>{canManage&&<button className="secondary" disabled={groupBusy||assetBusy} onClick={()=>changeGroup(g)}>Renombrar familia</button>}{!entries.length&&<p>{!catalogItems.some(x=>groupOf(x)===g)?'Sin gráficos por ahora.':'No hay gráficos que coincidan en esta familia.'}</p>}{measures.map(measure=><div key={measure} className="graphics-measure-group"><h3>{measure}</h3><div className={gallery?'graphics-gallery-grid':'graphics-list-grid'}>{entries.filter(x=>measureLabel(x)===measure).map(x=><button key={x.id} className="secondary graphic-catalog-card" onClick={()=>open(x)}>{gallery?<GraphicThumbnail id={x.id} revision={x.revision} name={x.name} api={api}/>:<Image size={22}/>}<strong>{catalogKey(x.folder)==='inf-abierto-cerrado'?'Abierto / Cerrado · dos caras':graphicName(x)}</strong><span>{specs(x)}</span></button>)}</div></div>)}</section>;})}
  <dialog ref={dialog} onCancel={e=>{if(assetBusy)e.preventDefault();}} onClose={()=>{setSelected(null);setLink(null);}} style={{width:'min(1080px,94vw)',maxHeight:'92vh',border:'1px solid #cbdbe3',borderRadius:14,padding:0}}>{selected&&<article>
  <header style={{background:'#173952',color:'white',padding:'18px 24px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:12}}><div><small style={{letterSpacing:2}}>GUÍA DE IMPRESIÓN</small><h2 style={{margin:'4px 0 0',color:'inherit',textTransform:'uppercase'}}>{groupName(groupOf(selected))}</h2></div><button className="secondary" aria-label="Cerrar" disabled={assetBusy} onClick={()=>dialog.current?.close()}><X size={18}/></button></header>
  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,300px),1fr))',gap:24,padding:24}}>
