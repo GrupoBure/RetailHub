@@ -17,7 +17,7 @@ function catalogGraphic(x:Graphic):Graphic{
  const top=x.folder.split('/')[0];
  const entry=Object.entries(finalFolderSpecs).find(([folder])=>catalogKey(folder)===catalogKey(top));
  if(!entry)return x;
- const base:GraphicSpec=[...entry[1]];
+ const base:GraphicSpec=[...entry[1]];base[0]=graphicName(x);
  if(catalogKey(top)==='ft- super maq'&&(superMaqSquareIds.has(x.id)||superMaqSquareFiles.has(x.name.toLowerCase()))){base[2]=14.5;base[3]=14.5;}
  const legacy=!x.spec||legacySpecs.some(s=>JSON.stringify(s)===JSON.stringify(x.spec));
  return {...x,spec:legacy?base:x.spec,group:x.group&&/Andrew|fichas supermaq|Lijas (Agua|Esmeril|Madera)/i.test(x.group)?top:x.group};
