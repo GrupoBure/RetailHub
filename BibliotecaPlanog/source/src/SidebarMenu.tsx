@@ -9,6 +9,8 @@ export default function SidebarMenu({account,items,tab,onNavigate}:{account:stri
  const [warning,setWarning]=useState('');
  const visible=items.filter(i=>i.visible!==false);
  const arranged=[...order.map(id=>visible.find(i=>i.id===id)).filter((i):i is Item=>!!i),...visible.filter(i=>!order.includes(i.id))];
+ // New reception entry appears next to Biblioteca until the user explicitly orders it.
+ if(!order.includes('receiving')){const at=arranged.findIndex(i=>i.id==='receiving');if(at>=0){const [entry]=arranged.splice(at,1),library=arranged.findIndex(i=>i.id==='library');arranged.splice(library>=0?library+1:0,0,entry);}}
  function save(ids:string[]){setOrder(ids);try{localStorage.setItem(key,JSON.stringify(ids));setWarning('');}catch{setWarning('No se pudo guardar el orden en este navegador.');}}
  function move(id:string,delta:number){const ids=arranged.map(i=>i.id);const from=ids.indexOf(id),to=from+delta;if(from<0||to<0||to>=ids.length)return;[ids[from],ids[to]]=[ids[to],ids[from]];save([...ids,...order.filter(x=>!ids.includes(x))]);}
  return <nav aria-label="Menú principal">
