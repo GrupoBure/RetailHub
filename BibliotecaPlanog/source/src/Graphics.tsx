@@ -82,18 +82,19 @@ export default function Graphics({api,canManage,requestUpload=false,onUploadOpen
   try{await ref.current('graphics/'+encodeURIComponent(target.id),{method:'DELETE',body:JSON.stringify({confirm_filename:target.name,revision:target.revision})});setItems(xs=>xs.filter(x=>x.id!==target.id));setSelected(null);setPendingDelete(false);dialog.current?.close();setAssetMessage('Gráfico eliminado de Dropbox y del portal.');}
   catch(e){setAssetError((e as Error).message);}finally{setAssetBusy(false);}
  }
- async function downloadAll(){
-  const picker=(window as any).showDirectoryPicker;if(!picker){setBatch('Abre este portal en Chrome o Edge de escritorio para descargar todos a una carpeta.');return;}
+ async function downloadGraphics(files:Graphic[],label?:string){
+  if(batchBusy||!files.length)return;
+  const picker=(window as any).showDirectoryPicker;if(!picker){setBatch('Abre este portal en Chrome o Edge de escritorio para descargar los originales a una carpeta.');return;}
   setBatchBusy(true);let done=0;
-  try{const root=await picker.call(window,{mode:'readwrite'});const destination=await root.getDirectoryHandle('Retail Hub - Gráficos '+new Date().toISOString().replace(/[:.]/g,'-'),{create:true});
-   for(const x of items){
-    setBatch('Descargando '+(done+1)+' de '+items.length+'…');
+  try{const root=await picker.call(window,{mode:'readwrite'});const destination=await root.getDirectoryHandle('Retail Hub - '+(label||'Gráficos').replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').replace(/[. ]+$/,'')+' '+new Date().toISOString().replace(/[:.]/g,'-'),{create:true});
+   for(const x of files){
+    setBatch('Descargando '+(done+1)+' de '+files.length+'…');
     const blob=await api('graphics/original',{method:'POST',body:JSON.stringify({id:x.id})});
     let dir=destination;for(const segment of x.folder.split('/').filter(Boolean))dir=await dir.getDirectoryHandle(segment,{create:true});
     const file=await dir.getFileHandle(x.name,{create:true});const stream=await file.createWritable();try{await stream.write(blob);await stream.close();}catch(e){await stream.abort().catch(()=>{});throw e;}done++;
    }
    setBatch(done+' originales descargados.');
-  }catch(e){setBatch((e as Error).name==='AbortError'&&!done?'Descarga cancelada.':done+' de '+items.length+' descargados. '+(e as Error).message);}finally{setBatchBusy(false);}
+  }catch(e){setBatch((e as Error).name==='AbortError'&&!done?'Descarga cancelada.':done+' de '+files.length+' descargados. '+(e as Error).message);}finally{setBatchBusy(false);}
  }
  const [gallery,setGallery]=useState(false);
  const groups=[...new Set([...realFolders,...Object.keys(labels),...Object.keys(finalFolderSpecs),...items.flatMap(x=>[x.folder,groupOf(x)])])].sort((a,b)=>a.localeCompare(b,'es'));
@@ -108,13 +109,13 @@ export default function Graphics({api,canManage,requestUpload=false,onUploadOpen
  {canManage&&<div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:14}}><button className="primary" disabled={assetBusy} onClick={()=>{setUploadOpen(v=>!v);setUploadFolder(folder||realFolders[0]||items[0]?.folder||'');setAssetError('');}}><Upload size={17}/> Subir gráfico</button><button className="secondary" disabled={assetBusy||loading} onClick={()=>{setAssetError('');refreshGraphics().catch(e=>setAssetError(e.message));}}><RefreshCw size={16}/> Actualizar gráficos</button></div>}
  {assetMessage&&<p role="status">{assetMessage}</p>}{assetError&&!selected&&<p className="error-banner" role="alert">{assetError}</p>}
  {canManage&&uploadOpen&&<form aria-label="Subir nuevo gráfico" className="ex-notes" onSubmit={e=>{e.preventDefault();void uploadGraphic(uploadFile);}}><h2>Subir original</h2><p>Se guarda el archivo completo en Dropbox, sin comprimir ni cambiar sus dimensiones.</p><label>Carpeta<select required disabled={assetBusy} value={uploadFolder} onChange={e=>setUploadFolder(e.target.value)}><option value="">Selecciona una carpeta</option>{[...new Set([...realFolders,...items.map(x=>x.folder)])].sort((a,b)=>a.localeCompare(b,'es')).map(g=><option key={g} value={g}>{groupName(g)}</option>)}</select></label><label>Archivo original<input type="file" required disabled={assetBusy} accept=".jpg,.jpeg,.png,.psd,.pdf" onChange={e=>setUploadFile(e.target.files?.[0]||null)}/></label><p>JPG, PNG, PSD o PDF · hasta 500 MB.</p><button className="primary" disabled={assetBusy||!uploadFile||!uploadFolder}>{assetBusy?'Subiendo '+assetProgress+'%':'Subir original'}</button><button type="button" className="secondary" disabled={assetBusy} onClick={()=>{setUploadOpen(false);setUploadFile(null);}}>Cancelar</button></form>}
- <button className="primary" disabled={batchBusy||!items.length} onClick={downloadAll}><Download size={17}/> Descargar todos los originales</button>{batch&&<p role="status">{batch}</p>}
+ <button className="primary" disabled={batchBusy||!items.length} onClick={()=>void downloadGraphics(items)}><Download size={17}/> Descargar todos los originales</button>{batch&&<p role="status">{batch}</p>}
  {groupError&&<p role="alert">{groupError}</p>}
  {loading?<p role="status">Cargando gráficos…</p>:error?<p className="error-banner" role="alert">{error}</p>:<p>{shown.length} gráficos</p>}
  <div className="graphics-view-controls" aria-label="Vista de gráficos"><button className={gallery?'secondary':'primary'} aria-pressed={!gallery} onClick={()=>setGallery(false)}><List size={17}/> Lista por medidas</button><button className={gallery?'primary':'secondary'} aria-pressed={gallery} onClick={()=>setGallery(true)}><LayoutGrid size={17}/> Vista conjunta</button><span>Orden: ancho y después alto, de menor a mayor.</span></div>
  {gallery&&<p>Vista de revisión: imágenes y primera página de cada PDF. Haz clic para ampliar y consultar la ficha completa. Respeta la familia y la búsqueda seleccionadas.</p>}
  {!loading&&!error&&!visibleGroups.length&&<p>No hay familias ni gráficos que coincidan con la búsqueda.</p>}
- {visibleGroups.map(g=>{const entries=shown.filter(x=>groupOf(x)===g),measures=[...new Set(entries.map(measureLabel))];return <section key={g} className="ex-notes"><h2>{groupName(g)} <small>({entries.length})</small></h2>{canManage&&<button className="secondary" disabled={groupBusy||assetBusy} onClick={()=>changeGroup(g)}>Renombrar familia</button>}{!entries.length&&<p>{!catalogItems.some(x=>groupOf(x)===g)?'Sin gráficos por ahora.':'No hay gráficos que coincidan en esta familia.'}</p>}{measures.map(measure=><div key={measure} className="graphics-measure-group"><h3>{measure}</h3><div className={gallery?'graphics-gallery-grid':'graphics-list-grid'}>{entries.filter(x=>measureLabel(x)===measure).map(x=><button key={x.id} className="secondary graphic-catalog-card" onClick={()=>open(x)}>{gallery?<GraphicThumbnail id={x.id} revision={x.revision} name={x.name} api={api}/>:<Image size={22}/>}<strong>{catalogKey(x.folder)==='inf-abierto-cerrado'?'Abierto / Cerrado · dos caras':graphicName(x)}</strong><span>{specs(x)}</span></button>)}</div></div>)}</section>;})}
+ {visibleGroups.map(g=>{const entries=shown.filter(x=>groupOf(x)===g),measures=[...new Set(entries.map(measureLabel))];return <section key={g} className="ex-notes"><h2>{groupName(g)} <small>({entries.length})</small></h2><button className="secondary" disabled={batchBusy||!items.some(x=>groupOf(x)===g)} aria-label={"Descargar familia "+groupName(g)} onClick={()=>void downloadGraphics(items.filter(x=>groupOf(x)===g),groupName(g))}><Download size={17}/> Descargar familia</button>{canManage&&<button className="secondary" disabled={groupBusy||assetBusy} onClick={()=>changeGroup(g)}>Renombrar familia</button>}{!entries.length&&<p>{!catalogItems.some(x=>groupOf(x)===g)?'Sin gráficos por ahora.':'No hay gráficos que coincidan en esta familia.'}</p>}{measures.map(measure=><div key={measure} className="graphics-measure-group"><h3>{measure}</h3><div className={gallery?'graphics-gallery-grid':'graphics-list-grid'}>{entries.filter(x=>measureLabel(x)===measure).map(x=><button key={x.id} className="secondary graphic-catalog-card" onClick={()=>open(x)}>{gallery?<GraphicThumbnail id={x.id} revision={x.revision} name={x.name} api={api}/>:<Image size={22}/>}<strong>{catalogKey(x.folder)==='inf-abierto-cerrado'?'Abierto / Cerrado · dos caras':graphicName(x)}</strong><span>{specs(x)}</span></button>)}</div></div>)}</section>;})}
  <dialog ref={dialog} onCancel={e=>{if(assetBusy)e.preventDefault();}} onClose={()=>{setSelected(null);setLink(null);}} style={{width:'min(1080px,94vw)',maxHeight:'92vh',border:'1px solid #cbdbe3',borderRadius:14,padding:0}}>{selected&&<article>
  <header style={{background:'#173952',color:'white',padding:'18px 24px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:12}}><div><small style={{letterSpacing:2}}>GUÍA DE IMPRESIÓN</small><h2 style={{margin:'4px 0 0',color:'inherit',textTransform:'uppercase'}}>{groupName(groupOf(selected))}</h2></div><button className="secondary" aria-label="Cerrar" disabled={assetBusy} onClick={()=>dialog.current?.close()}><X size={18}/></button></header>
  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,300px),1fr))',gap:24,padding:24}}>
@@ -125,3 +126,4 @@ export default function Graphics({api,canManage,requestUpload=false,onUploadOpen
  </div></article>}</dialog>
  </section>;
 }
+
