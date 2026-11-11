@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'accessories-1';
+const API_BUILD = 'graphics-folder-delete-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -469,9 +469,34 @@ function canManageGraphics(user:any){return user.app_metadata?.role==='admin'||u
 function requireGraphicManager(user:any){if(!canManageGraphics(user))throw new PortalError(403,'No tienes permiso para administrar gráficos.');}
 function graphicAccess(user:any){return canManageGraphics(user)||(user.app_metadata?.graphics_access??String(env.RH_GRAPHICS_READERS||'').split(',').some(id=>id.trim()===user.id))===true;}
 function graphicFile(e:any){return e?.['.tag']==='file'&&typeof e.name==='string'&&graphicExt.test(e.name)&&typeof e.path_lower==='string'&&e.path_lower.startsWith(graphicRoot().toLowerCase()+'/')&&!e.path_lower.split('/').includes('guías de impresión');}
+async function graphicFolderSnapshot(folder:unknown){
+ if(typeof folder!=='string'||!folder||folder.length>1000||folder.split('/').some(part=>!part||part==='.'||part==='..'||part.toLowerCase()==='guías de impresión'||/[\\\u0000-\u001f]/.test(part)))throw new PortalError(400,'Carpeta no válida.');
+ const path=graphicRoot()+'/'+folder,meta=await dbx('files/get_metadata',{path});
+ if(meta['.tag']!=='folder'||meta.path_lower!==path.toLowerCase())throw new PortalError(404,'Carpeta no disponible.');
+ const entries:any[]=[];let page=await dbx('files/list_folder',{path:meta.id,recursive:true,limit:500});
+ for(;;){entries.push(...page.entries);if(!page.has_more)break;page=await dbx('files/list_folder/continue',{cursor:page.cursor});}
+ const fingerprint=await digest(JSON.stringify(entries.map(e=>[e.id,e.path_lower,e.rev??'',e['.tag']]).sort((a,b)=>String(a[1]).localeCompare(String(b[1])))));
+ return {meta,entries,fingerprint,files:entries.filter(e=>e['.tag']==='file').length,folders:entries.filter(e=>e['.tag']==='folder').length};
+}
 async function graphicsRoutes(r:Request,p:string[],user:any){
  if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user),manage:canManageGraphics(user)});
  if(!graphicAccess(user))throw new PortalError(403,'No tienes acceso a Gráficos.');
+ if(p.length===2&&p[1]==='folder'&&(r.method==='POST'||r.method==='DELETE')){
+  if(user.app_metadata?.role!=='admin')throw new PortalError(403,'Solo administradores pueden eliminar carpetas.');
+  const b=await bodyJSON(r,8192);
+  if(r.method==='POST'){
+   const snapshot=await graphicFolderSnapshot(b.folder);
+   const ticket=await seal('graphics-folder-delete',{uid:user.id,folder:b.folder,id:snapshot.meta.id,fingerprint:snapshot.fingerprint,expires:Date.now()+300000});
+   return json({ticket,folder:b.folder,files:snapshot.files,folders:snapshot.folders});
+  }
+  if(typeof b.ticket!=='string')throw new PortalError(400,'Revisa la carpeta antes de eliminarla.');
+  const t=await unseal('graphics-folder-delete',b.ticket);
+  if(t.uid!==user.id||b.confirm_folder!==t.folder)throw new PortalError(400,'Confirma el nombre completo de la carpeta.');
+  const snapshot=await graphicFolderSnapshot(t.folder);
+  if(snapshot.meta.id!==t.id||snapshot.fingerprint!==t.fingerprint)throw new PortalError(409,'La carpeta cambió. Revisa de nuevo su contenido antes de eliminarla.');
+  await dbx('files/delete_v2',{path:snapshot.meta.id});
+  return json({ok:true,folder:t.folder,files:snapshot.files});
+ }
  if(r.method==='PATCH'&&p.length===2&&p[1]==='group'){
   requireGraphicManager(user);
   const {group,label,id}=await bodyJSON(r,4096);
@@ -683,7 +708,7 @@ async function handleRequest(r:Request){
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{graphicsManagement:true,liveDocuments:true,replaceReceivingBase:true,graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{graphicsFolderDeletion:true,graphicsManagement:true,liveDocuments:true,replaceReceivingBase:true,graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -1049,4 +1074,5 @@ export async function handle(r:Request){
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
 Deno.serve(handle);
+
 
