@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'graphics-folder-delete-1';
+const API_BUILD = 'graphics-folder-backup-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -494,8 +494,21 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
   if(t.uid!==user.id||b.confirm_folder!==t.folder)throw new PortalError(400,'Confirma el nombre completo de la carpeta.');
   const snapshot=await graphicFolderSnapshot(t.folder);
   if(snapshot.meta.id!==t.id||snapshot.fingerprint!==t.fingerprint)throw new PortalError(409,'La carpeta cambió. Revisa de nuevo su contenido antes de eliminarla.');
+  if(typeof b.backup!=='boolean')throw new PortalError(400,'Elige si deseas resguardar la carpeta antes de eliminarla.');
+  if(b.backup){
+   const backupRoot=graphicRoot().replace(/\/[^/]+$/,'')+'/RespaldoGraficos';
+   try{await dbx('files/create_folder_v2',{path:backupRoot,autorename:false});}catch(e){
+    if(!(e instanceof PortalError)||e.status!==409)throw e;
+    const existing=await dbx('files/get_metadata',{path:backupRoot});if(existing['.tag']!=='folder')throw new PortalError(409,'RespaldoGraficos está ocupado por un archivo. No se eliminó la carpeta.');
+   }
+   const leaf=String(t.folder).split('/').at(-1)!.slice(0,120),target=backupRoot+'/'+leaf+' - '+new Date().toISOString().replace(/[:.]/g,'-')+' - '+crypto.randomUUID();
+   // Archive the complete folder atomically; never delete the source if archiving fails.
+   const moved=await dbx('files/move_v2',{from_path:snapshot.meta.id,to_path:target,autorename:false,allow_shared_folder:false,allow_ownership_transfer:false});
+   if(moved.metadata?.id!==snapshot.meta.id||moved.metadata?.path_lower!==target.toLowerCase())throw new PortalError(502,'No se pudo confirmar el resguardo. Actualiza el catálogo y revisa RespaldoGraficos antes de reintentar.');
+   return json({ok:true,folder:t.folder,files:snapshot.files,backup_path:moved.metadata.path_display});
+  }
   await dbx('files/delete_v2',{path:snapshot.meta.id});
-  return json({ok:true,folder:t.folder,files:snapshot.files});
+  return json({ok:true,folder:t.folder,files:snapshot.files,backup_path:null});
  }
  if(r.method==='PATCH'&&p.length===2&&p[1]==='group'){
   requireGraphicManager(user);
