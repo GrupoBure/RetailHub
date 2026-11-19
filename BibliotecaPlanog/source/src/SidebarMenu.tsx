@@ -9,6 +9,7 @@ export default function SidebarMenu({account,items,tab,onNavigate}:{account:stri
  const [warning,setWarning]=useState('');
  const visible=items.filter(i=>i.visible!==false);
  const arranged=[...order.map(id=>visible.find(i=>i.id===id)).filter((i):i is Item=>!!i),...visible.filter(i=>!order.includes(i.id))];
+ if(!order.includes('mounting')){const at=arranged.findIndex(i=>i.id==='mounting');if(at>=0){const [entry]=arranged.splice(at,1),dash=arranged.findIndex(i=>i.id==='dashboard');arranged.splice(dash>=0?dash+1:0,0,entry);}}
  // New reception entry appears next to Biblioteca until the user explicitly orders it.
  if(!order.includes('receiving')){const at=arranged.findIndex(i=>i.id==='receiving');if(at>=0){const [entry]=arranged.splice(at,1),library=arranged.findIndex(i=>i.id==='library');arranged.splice(library>=0?library+1:0,0,entry);}}
  function save(ids:string[]){setOrder(ids);try{localStorage.setItem(key,JSON.stringify(ids));setWarning('');}catch{setWarning('No se pudo guardar el orden en este navegador.');}}
@@ -17,11 +18,11 @@ export default function SidebarMenu({account,items,tab,onNavigate}:{account:stri
   {arranged.map((i,index)=><div key={i.id}>
    {!order.length&&i.admin&&!arranged[index-1]?.admin&&<div className="workspace-label admin-label">ADMINISTRACIÓN</div>}
    <div style={{display:'flex',alignItems:'center',gap:2}}>
-    <button className={'nav-item '+(tab===i.id?'active':'')} aria-current={tab===i.id?'page':undefined} onClick={()=>onNavigate(i.id)} style={{flex:1,minWidth:0}}>{i.icon}{i.label}</button>
+    <button className={'nav-item '+(tab===i.id?'active':'')} title={i.label} aria-current={tab===i.id?'page':undefined} onClick={()=>onNavigate(i.id)} style={{flex:1,minWidth:0}}>{i.icon}<span className="nav-label">{i.label}</span></button>
     {editing&&<><button type="button" className="icon-btn" aria-label={'Subir '+i.label} disabled={index===0} onClick={()=>move(i.id,-1)}><ArrowUp size={15}/></button><button type="button" className="icon-btn" aria-label={'Bajar '+i.label} disabled={index===arranged.length-1} onClick={()=>move(i.id,1)}><ArrowDown size={15}/></button></>}
    </div>
   </div>)}
-  <button type="button" className="nav-item" aria-pressed={editing} onClick={()=>setEditing(v=>!v)}><ListOrdered size={19}/>{editing?'Listo':'Ordenar menú'}</button>
+  <button type="button" className="nav-item" title="Ordenar menú" aria-pressed={editing} onClick={()=>setEditing(v=>!v)}><ListOrdered size={19}/><span className="nav-label">{editing?'Listo':'Ordenar menú'}</span></button>
   {editing&&<button type="button" className="nav-item" onClick={()=>save([])}>Restablecer orden</button>}
   {warning&&<p role="status">{warning}</p>}
  </nav>;

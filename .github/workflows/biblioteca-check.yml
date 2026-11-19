@@ -37,6 +37,8 @@ jobs:
           node-version: '24'
       - run: npm ci
       - run: npm run build
+      - name: Validar permisos y guardado de montaje
+        run: node ../server/test-mounting.mjs
       - name: Revisar archivos de salida
         run: |
           test -s dist/index.html

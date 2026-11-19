@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'graphics-folder-backup-1';
+const API_BUILD = 'mounting-progress-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -716,12 +716,75 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
  throw new PortalError(404,'Ruta de exhibidores no disponible.');
 }
 
+export type MountZone={id:string;number:string;family:string;x:number;y:number;w:number;h:number;stage:0|1|2|3;note:string};
+export type MountData={name:string;image:string;original:string;zones:MountZone[]};
+export type MountRecord={id:string;revision:string;updatedAt:string;data:MountData};
+export const MOUNT_STAGES=['Sin avance','Accesorios colocados','Producto colocado','Precios colocados'];
+export const MOUNT_COLORS=['#64748b','#eab308','#16a34a','#2563eb'];
+export function validateMount(value:unknown):MountData{
+ const v=value as MountData,fail=()=>{throw Error('Revisa el nombre, el plano y las zonas de las góndolas.');};
+ const text=(s:unknown,max:number)=>typeof s==='string'&&s.length<=max;
+ const asset=(s:unknown)=>typeof s==='string'&&(/^[a-f0-9-]{36}\.(?:jpg|png|webp|pdf)$/.test(s)||s==='');
+ if(!v||!text(v.name,120)||!v.name.trim()||!asset(v.image)||!v.image||!/\.(jpg|png|webp)$/.test(v.image)||!asset(v.original)||!Array.isArray(v.zones)||v.zones.length>1000)fail();
+ const ids=new Set(),numbers=new Set();
+ const zones=v.zones.map(z=>{if(!z||!text(z.id,60)||!/^[a-zA-Z0-9-]+$/.test(z.id)||ids.has(z.id)||!text(z.number,30)||!z.number.trim()||numbers.has(z.number.trim().toLowerCase())||!text(z.family,120)||!text(z.note,1500)||![0,1,2,3].includes(z.stage)||![z.x,z.y,z.w,z.h].every(n=>typeof n==='number'&&Number.isFinite(n))||z.x<0||z.y<0||z.w<.002||z.h<.002||z.x+z.w>1.000001||z.y+z.h>1.000001)fail();ids.add(z.id);numbers.add(z.number.trim().toLowerCase());return {id:z.id,number:z.number.trim(),family:z.family.trim(),note:z.note,stage:z.stage,x:z.x,y:z.y,w:z.w,h:z.h};});
+ return {name:v.name.trim(),image:v.image,original:v.original,zones};
+}
+export function mountStage(checked:boolean,index:1|2|3,current:0|1|2|3):0|1|2|3{return (checked?index:Math.min(current,index-1)) as 0|1|2|3;}
+
+
+async function mountRoot(store:any){return (await liveFolder(store)).path_display+'/montaje';}
+async function mountFolders(root:string){for(const path of [root,root+'/registros',root+'/archivos']){try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const f=await dbx('files/get_metadata',{path});if(f['.tag']!=='folder')throw new PortalError(409,'Hay un archivo ocupando la carpeta de montaje.');}}}
+async function mountRead(root:string,id:string):Promise<MountRecord>{
+ if(!uuid(id))throw new PortalError(404,'Plano no disponible.');
+ let meta:any;try{meta=await dbx('files/get_metadata',{path:root+'/registros/'+id+'.json'});}catch(e){if(e instanceof DropboxNotFound)throw new PortalError(404,'Plano no disponible.');throw e;}
+ if(meta['.tag']!=='file'||meta.size>800000)throw new PortalError(404,'Plano no disponible.');
+ const bytes=await bounded(await content('files/download',{path:meta.id}),800000);let data:MountData;try{data=validateMount(JSON.parse(new TextDecoder().decode(bytes)).data);}catch{throw new PortalError(502,'No se pudo leer el plano de montaje.');}
+ return {id,revision:meta.rev,updatedAt:meta.server_modified,data};
+}
+async function mountWrite(path:string,bytes:Uint8Array,revision?:string){
+ const response=await fetch('https://content.dropboxapi.com/2/files/upload',{method:'POST',headers:{Authorization:'Bearer '+await dbxToken(),'Dropbox-API-Arg':headerJSON({path,mode:revision?{'.tag':'update',update:revision}:'add',autorename:false,mute:true,strict_conflict:true}),'Content-Type':'application/octet-stream'},body:bytes});
+ if(response.status===409)throw new PortalError(409,'Otra persona actualizó este plano. Recarga para consultar su avance antes de guardar.');
+ if(!response.ok)throw new PortalError(response.status===429?429:502,'No se pudo guardar el avance en Dropbox.');return await response.json();
+}
+async function mountingRoutes(r:Request,p:string[],user:any){
+ const method=r.method,query=new URL(r.url).searchParams;
+ if(method!=='GET')membership(user,true);
+ const store=await requireStore(query.get('store'),user),root=await mountRoot(store);
+ if(p.length===1&&method==='GET'){
+  let page:any;try{page=await dbx('files/list_folder',{path:root+'/registros',limit:100});}catch(e){if(e instanceof DropboxNotFound)return json({plans:[]});throw e;}
+  const plans=[];for(;;){for(const f of page.entries){const id=String(f.name).replace(/\.json$/,'');if(f['.tag']!=='file'||!uuid(id))continue;const rec=await mountRead(root,id);plans.push({id,revision:rec.revision,updatedAt:rec.updatedAt,name:rec.data.name,total:rec.data.zones.length,complete:rec.data.zones.filter(z=>z.stage===3).length});}if(!page.has_more)break;page=await dbx('files/list_folder/continue',{cursor:page.cursor});}return json({plans});
+ }
+ if(p.length===2&&p[1]==='assets'&&method==='POST'){
+  const mime=(r.headers.get('content-type')||'').split(';')[0],pdf=mime==='application/pdf';if(!pdf&&!/^image\/(jpeg|png|webp)$/.test(mime))throw new PortalError(415,'Usa PDF, JPG, PNG o WebP.');
+  const bytes=await bounded(r,pdf?50000000:10000000);if(pdf){if(new TextDecoder().decode(bytes.slice(0,5))!=='%PDF-')throw new PortalError(400,'El archivo no es un PDF válido.');}else try{checkExhibitImage(mime,bytes);}catch(e){throw new PortalError(400,(e as Error).message);}
+  await mountFolders(root);const asset=crypto.randomUUID()+'.'+(pdf?'pdf':mime==='image/jpeg'?'jpg':mime==='image/png'?'png':'webp');await mountWrite(root+'/archivos/'+asset,bytes);return json({asset},201);
+ }
+ if(p.length===1&&method==='POST'){
+  const b=await bodyJSON(r,800000);let data:MountData;try{data=validateMount(b.data);}catch(e){throw new PortalError(400,(e as Error).message);}await mountFolders(root);for(const asset of [data.image,data.original].filter(Boolean))await dbx('files/get_metadata',{path:root+'/archivos/'+asset});
+  const id=crypto.randomUUID(),meta=await mountWrite(root+'/registros/'+id+'.json',new TextEncoder().encode(JSON.stringify({data})));return json({record:{id,revision:meta.rev,updatedAt:meta.server_modified,data}},201);
+ }
+ const rec=await mountRead(root,p[1]);
+ if(p.length===2&&method==='GET')return json({record:rec});
+ if(p.length===3&&p[2]==='image'&&method==='GET'){
+  const bytes=await bounded(await content('files/download',{path:root+'/archivos/'+rec.data.image}),10000000);let bin='';for(let i=0;i<bytes.length;i+=32768)bin+=String.fromCharCode(...bytes.subarray(i,i+32768));const ext=rec.data.image.split('.').at(-1);return json({dataUrl:'data:image/'+(ext==='jpg'?'jpeg':ext)+';base64,'+btoa(bin)});
+ }
+ if(p.length===3&&p[2]==='original'&&method==='GET'){const asset=rec.data.original||rec.data.image;const link=await dbx('files/get_temporary_link',{path:root+'/archivos/'+asset});return json({url:link.link});}
+ if(p.length===2&&(method==='PATCH'||method==='DELETE')){
+  const b=await bodyJSON(r,800000);if(b.revision!==rec.revision)throw new PortalError(409,'Otra persona actualizó este plano. Recarga antes de guardar.');
+  if(method==='DELETE'){if(b.confirm_name!==rec.data.name)throw new PortalError(400,'Confirma el nombre del plano.');await dbx('files/delete_v2',{path:root+'/registros/'+rec.id+'.json',parent_rev:rec.revision});return json({ok:true});}
+  let data:MountData;try{data=validateMount(b.data);}catch(e){throw new PortalError(400,(e as Error).message);}for(const asset of [data.image,data.original].filter(Boolean))await dbx('files/get_metadata',{path:root+'/archivos/'+asset});
+  const meta=await mountWrite(root+'/registros/'+rec.id+'.json',new TextEncoder().encode(JSON.stringify({data})),rec.revision);return json({record:{id:rec.id,revision:meta.rev,updatedAt:meta.server_modified,data}});
+ }
+ throw new PortalError(404,'Ruta de montaje no disponible.');
+}
+
 async function handleRequest(r:Request){
  try{
  const segments=new URL(r.url).pathname.split('/').filter(Boolean);const index=segments.indexOf('retailhub-api');const p=index>=0?segments.slice(index+1):segments;const route=p.join('/'); const method=r.method;
  if(method==='OPTIONS'){sameOrigin(r);return new Response(null,{status:204,headers:cors});}
  if(method!=='GET')sameOrigin(r);
- if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{graphicsFolderDeletion:true,graphicsManagement:true,liveDocuments:true,replaceReceivingBase:true,graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
+ if(route==='status'&&method==='GET')return json({version:API_VERSION,build:API_BUILD,features:{mounting:true,graphicsFolderDeletion:true,graphicsManagement:true,liveDocuments:true,replaceReceivingBase:true,graphicsPermissions:true,accessories:true,exhibitImageBinary:true,exhibitTruper:true,exhibitors:true,activity:true,deleteStores:true,editStores:true,storeSections:true,deleteDocuments:true,storeDashboard:true,dashboardTemplates:true,quotes:true,quotePermissions:true,quoteTools:true,quoteRecords:true},auth:authReady(),dropboxApp:!!(config().dbxKey&&config().dbxSecret),root:authReady()?undefined:null});
  if(route==='login'&&method==='POST'){
  const b:any=await bodyJSON(r);if(typeof b.password!=='string'||b.password.length>256)throw new PortalError(400,'Revisa tu usuario y contraseña.');
  let data:any;
@@ -776,6 +839,7 @@ async function handleRequest(r:Request){
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
  if(p[0]==='graphics')return await graphicsRoutes(r,p,user);
  if(p[0]==='accessories')return await accessoryRoutes(r,p,user);
+ if(p[0]==='mounting')return await mountingRoutes(r,p,user);
  if(p[0]==='exhibitors')return await exhibitRoutes(r,p,user);
  if(route==='me'&&method==='GET')return json({user:safeUser(user)});
  if(route==='activity/heartbeat'&&method==='POST')return json({recorded:await activityRecord(bearer(r),user,(r.body?await bodyJSON(r):{}).active===true?'pulse':'idle')});
