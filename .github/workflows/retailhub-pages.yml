@@ -33,6 +33,8 @@ jobs:
       - run: npm run build
       - name: Validar permisos y guardado de montaje
         run: node ../server/test-mounting.mjs
+      - name: Validar consulta de exhibidores en lote
+        run: node ../server/test-exhibit-batch.mjs
       - name: Revisar archivos de salida
         run: |
           test -s dist/index.html
