@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'native-image-encoding-2';
+const API_BUILD = 'exhibit-store-edit-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -71,7 +71,7 @@ export async function requireUser(r:Request,admin=false){
  const t=bearer(r);if(!t)throw new PortalError(401,'Inicia sesión para continuar.');
  return membership(await supa('/auth/v1/user',{},t),admin);
 }
-export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,graphics_access:graphicAccess(u),graphics_manage:canManageGraphics(u),last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),exhibit_store_ids:exhibitStoreIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
+export const safeUser=(u:any)=>({id:u.id,name:u.user_metadata?.name||u.email?.split('@')[0],username:u.email?.split('@')[0],role:u.app_metadata?.role==='admin'?'admin':'reader',enabled:!u.app_metadata?.disabled,graphics_access:graphicAccess(u),graphics_manage:canManageGraphics(u),last_sign_in_at:u.last_sign_in_at,store_ids:storeIds(u),exhibit_store_ids:exhibitStoreIds(u),exhibit_edit_store_ids:exhibitEditStoreIds(u),quote_view_store_ids:quoteStoreIds(u),quote_approve_store_ids:quoteStoreIds(u,true)});
 export function username(v:unknown){if(typeof v!=='string'||!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(v.toLowerCase()))throw new PortalError(400,'Usa de 3 a 40 letras sin acentos, números, puntos o guiones para el usuario.');return v.toLowerCase();}
 const email=(v:unknown)=>username(v)+'@usuarios.retailhub.invalid';
 export {email};
@@ -456,6 +456,10 @@ export function exhibitImageRequest(dataUrl:string,binary:boolean,original?:Blob
 }
 
 function exhibitStoreIds(u:any):string[]{return Array.isArray(u?.app_metadata?.exhibit_store_ids)?[...new Set((u.app_metadata.exhibit_store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
+export function exhibitEditStoreIds(u:any):string[]{
+ const allowed=u?.app_metadata?.exhibit_edit_store_ids;
+ return Array.isArray(allowed)?exhibitStoreIds(u).filter(id=>allowed.some(value=>uuid(value)&&value.toLowerCase()===id)):[];
+}
 async function exhibitRoot(store:any){const folder=await liveFolder(store);return folder.path_display+'/exhibidores';}
 async function ensureExhibitFolders(root:string){for(const path of [root,root+'/registros',root+'/imagenes']){try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const f=await dbx('files/get_metadata',{path});if(f['.tag']!=='folder')throw new PortalError(409,'Hay un archivo ocupando la carpeta de exhibidores.');}}}
 const exhibitReadCache=new Map<string,{record:ExhibitRecord;size:number;until:number}>();let exhibitReadCacheBytes=0;
@@ -698,7 +702,8 @@ async function accessoryRoutes(r:Request,p:string[],user:any){
 async function exhibitRoutes(r:Request,p:string[],user:any){
  const method=r.method,query=new URL(r.url).searchParams;
  const store=await requireStore(query.get('store'),user,'exhibitors'),admin=user.app_metadata.role==='admin';
- if(p.length===2&&p[1]==='truper'&&method==='POST'){membership(user,true);const b=await bodyJSON(r);if(typeof b.code!=='string'||(b.source!==undefined&&typeof b.source!=='string')||String(b.source||'').length>1500)throw new PortalError(400,'Revisa el código y la ficha oficial.');try{return json(await fetchTruperProduct(b.code.trim(),b.source?.trim()||''));}catch(e){throw new PortalError(422,(e as Error).name==='TimeoutError'?'Truper tardó demasiado en responder. Intenta de nuevo más tarde.':(e as Error).message);}}
+ const canEdit=admin||exhibitEditStoreIds(user).includes(store.id);
+ if(p.length===2&&p[1]==='truper'&&method==='POST'){if(!canEdit)membership(user,true);const b=await bodyJSON(r);if(typeof b.code!=='string'||(b.source!==undefined&&typeof b.source!=='string')||String(b.source||'').length>1500)throw new PortalError(400,'Revisa el código y la ficha oficial.');try{return json(await fetchTruperProduct(b.code.trim(),b.source?.trim()||''));}catch(e){throw new PortalError(422,(e as Error).name==='TimeoutError'?'Truper tardó demasiado en responder. Intenta de nuevo más tarde.':(e as Error).message);}}
  const root=await exhibitRoot(store);
  if(p.length===1&&method==='GET'){
   let listing:any;const cursor=query.get('cursor');
@@ -708,7 +713,7 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
   return json({exhibitors:items,next:listing.has_more?await seal('exhibit-list',{uid:user.id,store:store.id,cursor:listing.cursor,expires:Date.now()+900000}):null});
  }
  if(p.length===2&&p[1]==='assets'&&method==='POST'){
-  membership(user,true);let mime:string,bytes:Uint8Array;const type=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  if(!canEdit)membership(user,true);let mime:string,bytes:Uint8Array;const type=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
   try{if(/^image\/(jpeg|png|webp)$/.test(type)){mime=type;bytes=await bounded(r,EXHIBIT_IMAGE_LIMIT);}else if(type==='application/json'||!type){const b=await bodyJSON(r,14000000);({mime,bytes}=decodeExhibitImage(b.dataUrl));}else throw new ExhibitImageError('Selecciona una imagen JPG, PNG o WebP.',415);checkExhibitImage(mime,bytes);}catch(e){if(e instanceof ExhibitImageError)throw new PortalError(e.status,e.message);throw e;}
   await ensureExhibitFolders(root);const name=crypto.randomUUID()+'.'+(mime==='image/jpeg'?'jpg':mime==='image/png'?'png':'webp');await exhibitWrite(root+'/imagenes/'+name,bytes);return json({asset:name},201);
  }
@@ -725,9 +730,9 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
   const bytes=await bounded(await content('files/download',{path:f.id}),10000000);const mime=p[3].endsWith('.jpg')?'image/jpeg':p[3].endsWith('.png')?'image/png':'image/webp';return json({dataUrl:rasterDataURL(bytes,mime)});
  }
  if(p.length===2&&(method==='PATCH'||method==='DELETE')){
-  membership(user,true);const b=await bodyJSON(r,800000);if(b.revision!==rec.revision)throw new PortalError(409,'El exhibidor cambió. Vuelve a abrirlo antes de guardar.');
+  if(method==='DELETE'||!canEdit)membership(user,true);const b=await bodyJSON(r,800000);if(b.revision!==rec.revision)throw new PortalError(409,'El exhibidor cambió. Vuelve a abrirlo antes de guardar.');
   if(method==='DELETE'){if(b.confirm_name!==rec.data.name)throw new PortalError(400,'Confirma el nombre del exhibidor.');await dbx('files/delete_v2',{path:root+'/registros/'+rec.id+'.json',parent_rev:rec.revision});return json({ok:true});}
-  const data=validateExhibit(b.data);for(const asset of exhibitAssets(data)){const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+asset});if(f['.tag']!=='file')throw new PortalError(400,'Falta una imagen del exhibidor.');}
+  const data=validateExhibit(b.data);if(!admin&&data.published!==rec.data.published)throw new PortalError(403,'Solo un administrador puede cambiar la visibilidad.');for(const asset of exhibitAssets(data)){const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+asset});if(f['.tag']!=='file')throw new PortalError(400,'Falta una imagen del exhibidor.');}
   const meta=await exhibitWrite(root+'/registros/'+rec.id+'.json',new TextEncoder().encode(JSON.stringify({data})),rec.revision);return json({record:{id:rec.id,revision:meta.rev,updatedAt:meta.server_modified,data}});
  }
  throw new PortalError(404,'Ruta de exhibidores no disponible.');
