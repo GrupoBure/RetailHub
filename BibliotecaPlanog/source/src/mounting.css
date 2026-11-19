@@ -19,3 +19,7 @@
  .mt-print-plan{width:240mm;max-width:100%}.mt-print-zone span{font-size:5.8pt!important}.mt-print-foot{font-size:7pt;margin-top:3mm;padding-top:2mm}.mt-print-warning{font-size:8pt;margin:0 0 2mm}
  .mt-print-paper,.mt-print-legend i,.mt-print-heading{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
+
+.mt-pie{margin:0;flex:0 0 116px;width:116px;text-align:center;color:inherit}.mt-pie svg{display:block;width:108px;height:108px;margin:auto;overflow:visible}.mt-pie text{fill:currentColor;font-family:inherit}.mt-pie-total{font-size:22px;font-weight:800}.mt-pie-label{font-size:10px}.mt-pie figcaption{font-size:10px;margin-top:3px;line-height:1.3}.mt-print-heading>.mt-print-progress{display:flex;align-items:center;gap:16px;text-align:right}.mt-print-progress>div{display:grid;gap:3px}.mt-print-progress .mt-pie{flex-basis:90px;width:90px;text-align:center}.mt-print-progress .mt-pie svg{width:86px;height:86px}.mt-print-progress .mt-pie figcaption{font-size:9px}
+@media(max-width:700px){.mt-summary .mt-pie{align-self:center}.mt-print-heading>.mt-print-progress{gap:5px}.mt-print-progress .mt-pie{width:65px;flex-basis:65px}.mt-print-progress .mt-pie svg{width:62px;height:62px}.mt-print-progress .mt-pie figcaption{font-size:8px}}
+@media print{.mt-print-progress .mt-pie{width:23mm;flex-basis:23mm}.mt-print-progress .mt-pie svg{width:21mm;height:21mm}.mt-pie svg,.mt-pie circle{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
