@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'mounting-progress-1';
+const API_BUILD = 'exhibitor-incomplete-drafts-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -354,9 +354,10 @@ export function validateExhibit(v:any):ExhibitData{
   const source=text(p.source,1500);if(source){let u:URL;try{u=new URL(source);}catch{fail('Usa un enlace oficial de Truper.');}if(u!.protocol!=='https:'||!['www.truper.com','truper.com'].includes(u!.hostname)||u!.username||u!.password)fail('Usa un enlace oficial de Truper.');}
   let zone:ExhibitZone|null=null;if(p.zone!==null){if(!p.zone||['x','y','w','h'].some(k=>typeof p.zone[k]!=='number'||!Number.isFinite(p.zone[k]))||p.zone.x<0||p.zone.y<0||p.zone.w<.005||p.zone.h<.005||p.zone.x+p.zone.w>1.000001||p.zone.y+p.zone.h>1.000001)fail('La zona debe quedar dentro de la foto.');zone={x:p.zone.x,y:p.zone.y,w:p.zone.w,h:p.zone.h};}
   if(!Array.isArray(p.specs)||p.specs.length>40)fail('Revisa las características del artículo.');
-  return {id,code:text(p.code,40,true),description:text(p.description,2000,true),key:text(p.key,100),brand:text(p.brand,100),dimensions:text(p.dimensions,2000),installation:text(p.installation,2000),source,image:asset(p.image),drawing:asset(p.drawing),specs:p.specs.map((s:any)=>({label:text(s.label,150,true),value:text(s.value,1000,true)})),zone,placement:text(p.placement,1000)};
+  if(v.published&&(!String(p.code||'').trim()||!String(p.description||'').trim()))fail('Completa el código y la descripción de cada artículo para publicar, o usa Guardar borrador para terminar después.');
+  return {id,code:text(p.code,40,v.published),description:text(p.description,2000,v.published),key:text(p.key,100),brand:text(p.brand,100),dimensions:text(p.dimensions,2000),installation:text(p.installation,2000),source,image:asset(p.image),drawing:asset(p.drawing),specs:p.specs.map((s:any)=>({label:text(s.label,150,v.published),value:text(s.value,1000,v.published)})),zone,placement:text(p.placement,1000)};
  });
- const data={name:text(v.name,160,true),project:text(v.project,160),notes:text(v.notes,6000),referenceNote:text(v.referenceNote,2000,true),photo:asset(v.photo),plan:asset(v.plan),planNote:text(v.planNote,2000),products,published:v.published};
+ const data={name:text(v.name,160,true),project:text(v.project,160),notes:text(v.notes,6000),referenceNote:text(v.referenceNote,2000,v.published),photo:asset(v.photo),plan:asset(v.plan),planNote:text(v.planNote,2000),products,published:v.published};
  if(data.published&&(!data.photo||!data.products.length))fail('Agrega una fotografía y artículos antes de publicar.');
  return data;
 }
