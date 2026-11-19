@@ -1,7 +1,7 @@
 // Shared exhibitor validation. Keep the server copy identical.
 export type ExhibitZone={x:number;y:number;w:number;h:number};
 export type ExhibitProduct={id:string;code:string;description:string;key:string;brand:string;dimensions:string;installation:string;source:string;image:string;drawing:string;specs:{label:string;value:string}[];zone:ExhibitZone|null;placement:string};
-export type ExhibitData={name:string;project:string;notes:string;referenceNote:string;photo:string;plan:string;planNote:string;products:ExhibitProduct[];published:boolean};
+export type ExhibitData={name:string;project:string;family?:string;notes:string;referenceNote:string;photo:string;plan:string;planNote:string;products:ExhibitProduct[];published:boolean};
 export type ExhibitRecord={id:string;revision:string;updatedAt:string;data:ExhibitData};
 export const EXHIBIT_REFERENCE='Fotografía de referencia. Las zonas indican dónde se propone colocar los artículos actuales. Fabricar conforme al plano y al listado de este proyecto.';
 export const exhibitAssetName=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9-]{36}\.(jpg|png|webp)$/.test(v);
@@ -19,7 +19,7 @@ export function validateExhibit(v:any):ExhibitData{
   if(v.published&&(!String(p.code||'').trim()||!String(p.description||'').trim()))fail('Completa el código y la descripción de cada artículo para publicar, o usa Guardar borrador para terminar después.');
   return {id,code:text(p.code,40,v.published),description:text(p.description,2000,v.published),key:text(p.key,100),brand:text(p.brand,100),dimensions:text(p.dimensions,2000),installation:text(p.installation,2000),source,image:asset(p.image),drawing:asset(p.drawing),specs:p.specs.map((s:any)=>({label:text(s.label,150,v.published),value:text(s.value,1000,v.published)})),zone,placement:text(p.placement,1000)};
  });
- const data={name:text(v.name,160,true),project:text(v.project,160),notes:text(v.notes,6000),referenceNote:text(v.referenceNote,2000,v.published),photo:asset(v.photo),plan:asset(v.plan),planNote:text(v.planNote,2000),products,published:v.published};
+ const data={name:text(v.name,160,true),project:text(v.project,160),...(v.family===undefined?{}:{family:text(v.family,120)}),notes:text(v.notes,6000),referenceNote:text(v.referenceNote,2000,v.published),photo:asset(v.photo),plan:asset(v.plan),planNote:text(v.planNote,2000),products,published:v.published};
  if(data.published&&(!data.photo||!data.products.length))fail('Agrega una fotografía y artículos antes de publicar.');
  return data;
 }
@@ -27,3 +27,4 @@ export function exhibitAssets(d:ExhibitData){return [...new Set([d.photo,d.plan,
 export function zoneFromDrag(a:{x:number;y:number},b:{x:number;y:number}):ExhibitZone|null{
  const clamp=(n:number)=>Math.min(1,Math.max(0,n)),x=Math.min(clamp(a.x),clamp(b.x)),y=Math.min(clamp(a.y),clamp(b.y)),w=Math.abs(clamp(a.x)-clamp(b.x)),h=Math.abs(clamp(a.y)-clamp(b.y));return w<.005||h<.005?null:{x,y,w,h};
 }
+

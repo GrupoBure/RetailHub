@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitor-loading-1';
+const API_BUILD = 'exhibitor-families-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -345,7 +345,7 @@ export async function activityRecord(token:string,user:any,kind:string){
 // Shared exhibitor validation. Keep the server copy identical.
 export type ExhibitZone={x:number;y:number;w:number;h:number};
 export type ExhibitProduct={id:string;code:string;description:string;key:string;brand:string;dimensions:string;installation:string;source:string;image:string;drawing:string;specs:{label:string;value:string}[];zone:ExhibitZone|null;placement:string};
-export type ExhibitData={name:string;project:string;notes:string;referenceNote:string;photo:string;plan:string;planNote:string;products:ExhibitProduct[];published:boolean};
+export type ExhibitData={name:string;project:string;family?:string;notes:string;referenceNote:string;photo:string;plan:string;planNote:string;products:ExhibitProduct[];published:boolean};
 export type ExhibitRecord={id:string;revision:string;updatedAt:string;data:ExhibitData};
 export const EXHIBIT_REFERENCE='Fotografía de referencia. Las zonas indican dónde se propone colocar los artículos actuales. Fabricar conforme al plano y al listado de este proyecto.';
 export const exhibitAssetName=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9-]{36}\.(jpg|png|webp)$/.test(v);
@@ -363,7 +363,7 @@ export function validateExhibit(v:any):ExhibitData{
   if(v.published&&(!String(p.code||'').trim()||!String(p.description||'').trim()))fail('Completa el código y la descripción de cada artículo para publicar, o usa Guardar borrador para terminar después.');
   return {id,code:text(p.code,40,v.published),description:text(p.description,2000,v.published),key:text(p.key,100),brand:text(p.brand,100),dimensions:text(p.dimensions,2000),installation:text(p.installation,2000),source,image:asset(p.image),drawing:asset(p.drawing),specs:p.specs.map((s:any)=>({label:text(s.label,150,v.published),value:text(s.value,1000,v.published)})),zone,placement:text(p.placement,1000)};
  });
- const data={name:text(v.name,160,true),project:text(v.project,160),notes:text(v.notes,6000),referenceNote:text(v.referenceNote,2000,v.published),photo:asset(v.photo),plan:asset(v.plan),planNote:text(v.planNote,2000),products,published:v.published};
+ const data={name:text(v.name,160,true),project:text(v.project,160),...(v.family===undefined?{}:{family:text(v.family,120)}),notes:text(v.notes,6000),referenceNote:text(v.referenceNote,2000,v.published),photo:asset(v.photo),plan:asset(v.plan),planNote:text(v.planNote,2000),products,published:v.published};
  if(data.published&&(!data.photo||!data.products.length))fail('Agrega una fotografía y artículos antes de publicar.');
  return data;
 }
@@ -701,7 +701,7 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
   let listing:any;const cursor=query.get('cursor');
   try{if(cursor){const t=await unseal('exhibit-list',cursor);if(t.uid!==user.id||t.store!==store.id||t.expires<Date.now())throw new PortalError(400,'Actualiza la lista de exhibidores.');listing=await dbx('files/list_folder/continue',{cursor:t.cursor});}else listing=await dbx('files/list_folder',{path:root+'/registros',limit:100,recursive:false});}catch(e){if(e instanceof DropboxNotFound)return json({exhibitors:[],next:null});throw e;}
   const items=[];const entries=listing.entries.filter((f:any)=>f['.tag']==='file'&&uuid(String(f.name).replace(/\.json$/,'')));
-  for(let i=0;i<entries.length;i+=6){const group=await Promise.all(entries.slice(i,i+6).map(async(f:any)=>{const rec=await exhibitRead(root,String(f.name).replace(/\.json$/,''),cursor?undefined:f);return admin||rec.data.published?{id:rec.id,revision:rec.revision,updatedAt:rec.updatedAt,name:rec.data.name,project:rec.data.project,count:rec.data.products.length,published:rec.data.published,photo:rec.data.photo}:null;}));items.push(...group.filter(Boolean));}
+  for(let i=0;i<entries.length;i+=6){const group=await Promise.all(entries.slice(i,i+6).map(async(f:any)=>{const rec=await exhibitRead(root,String(f.name).replace(/\.json$/,''),cursor?undefined:f);return admin||rec.data.published?{id:rec.id,revision:rec.revision,updatedAt:rec.updatedAt,name:rec.data.name,project:rec.data.project,family:rec.data.family||'',count:rec.data.products.length,published:rec.data.published,photo:rec.data.photo}:null;}));items.push(...group.filter(Boolean));}
   return json({exhibitors:items,next:listing.has_more?await seal('exhibit-list',{uid:user.id,store:store.id,cursor:listing.cursor,expires:Date.now()+900000}):null});
  }
  if(p.length===2&&p[1]==='assets'&&method==='POST'){
@@ -1165,5 +1165,6 @@ export async function handle(r:Request){
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
 Deno.serve(handle);
+
 
 
