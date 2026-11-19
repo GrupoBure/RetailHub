@@ -18,7 +18,7 @@ export function parseTruperProduct(html:string,code:string,source:string){
  const installation=specs.filter(s=>/corte|empotramiento|instalaci[oó]n|montaje/i.test(s.label)).map(s=>s.label+': '+s.value).join('\n').slice(0,2000);
  const brandName=safe.match(/BibliotecaMarcas\/svg\/([a-z0-9-]+)\.svg/i)?.[1];const brand=brandName?brandName.replace(/-/g,' ').toUpperCase().slice(0,100):'';
  const names=[...safe.matchAll(/<img\b[^>]*\bsrc=["'][^"']*media\/import\/imagenes\/([^"'/?]+)\.(jpg|png|webp)["']/gi)].map(m=>({name:m[1],ext:m[2]}));
- const main=names.find(n=>n.name.toUpperCase()===key.toUpperCase()),drawing=names.find(n=>n.name.toUpperCase().startsWith(key.toUpperCase()+'+D')&&/\+D\d+$/i.test(n.name));
+ const main=names.find(n=>n.name.toUpperCase()===key.toUpperCase()),drawing=['D','E'].map(kind=>names.find(n=>n.name.toUpperCase().startsWith(key.toUpperCase()+'+'+kind)&&new RegExp('\\+'+kind+'\\d+$','i').test(n.name))).find(Boolean);
  const image=(n:typeof main)=>n?truperURL('https://www.truper.com/media/import/imagenes/'+n.name+'.'+n.ext,'image'):'';
  return {product:{code,description,key,brand,dimensions,installation,source:truperURL(source),specs},imageURL:image(main),drawingURL:image(drawing)};
 }
@@ -50,6 +50,6 @@ export async function fetchTruperProduct(code:string,source=''):Promise<TruperRe
  const warnings:string[]=[];
  async function image(url:string){if(!url)return '';try{const {r}=await request(url,{},'image'),b=await bytes(r,4000000);const mime=b[0]===255&&b[1]===216&&b[2]===255?'image/jpeg':[137,80,78,71,13,10,26,10].every((v,i)=>b[i]===v)?'image/png':new TextDecoder().decode(b.slice(0,4))==='RIFF'&&new TextDecoder().decode(b.slice(8,12))==='WEBP'?'image/webp':'';if(!mime)throw Error('No es una imagen compatible.');let binary='';for(let i=0;i<b.length;i+=32768)binary+=String.fromCharCode(...b.subarray(i,i+32768));return 'data:'+mime+';base64,'+btoa(binary);}catch{warnings.push('No se pudo descargar una imagen oficial. Puedes incorporarla manualmente.');return '';}}
  const imageDataUrl=await image(parsed.imageURL),drawingDataUrl=await image(parsed.drawingURL);
- if(!parsed.product.dimensions)warnings.push('La ficha no publica dimensiones físicas identificables. Quedan pendientes.');if(!parsed.product.installation)warnings.push('La ficha no publica una medida de corte identificable. No usar la medida exterior como perforación.');if(!imageDataUrl)warnings.push('Fotografía de producto pendiente.');if(!drawingDataUrl)warnings.push('Sin imagen de dimensiones disponible; se mostrará la ficha visual con los datos publicados.');
+ if(!parsed.product.dimensions)warnings.push(drawingDataUrl?'Las medidas están en la imagen oficial adjunta; la tabla no las incluye en texto. Captura sus valores si los necesitas como datos editables.':'No se pudieron extraer medidas de la tabla. Revisa las imágenes y la ficha oficial antes de marcarlas como pendientes.');if(!parsed.product.installation)warnings.push('La ficha no publica una medida de corte identificable. No usar la medida exterior como perforación.');if(!imageDataUrl)warnings.push('Fotografía de producto pendiente.');if(!drawingDataUrl)warnings.push('Sin imagen de dimensiones disponible; se mostrará la ficha visual con los datos publicados.');
  return {product:parsed.product,imageDataUrl,drawingDataUrl,warnings};
 }
