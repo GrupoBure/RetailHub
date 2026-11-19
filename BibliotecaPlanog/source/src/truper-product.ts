@@ -18,7 +18,7 @@ export function parseTruperProduct(html:string,code:string,source:string){
  const installation=specs.filter(s=>/corte|empotramiento|instalaci[oó]n|montaje/i.test(s.label)).map(s=>s.label+': '+s.value).join('\n').slice(0,2000);
  const brandName=safe.match(/BibliotecaMarcas\/svg\/([a-z0-9-]+)\.svg/i)?.[1];const brand=brandName?brandName.replace(/-/g,' ').toUpperCase().slice(0,100):'';
  const names=[...safe.matchAll(/<img\b[^>]*\bsrc=["'][^"']*media\/import\/imagenes\/([^"'/?]+)\.(jpg|png|webp)["']/gi)].map(m=>({name:m[1],ext:m[2]}));
- const main=names.find(n=>n.name.toUpperCase()===key.toUpperCase()),drawing=['D','E'].map(kind=>names.find(n=>n.name.toUpperCase().startsWith(key.toUpperCase()+'+'+kind)&&new RegExp('\\+'+kind+'\\d+$','i').test(n.name))).find(Boolean);
+ const main=names.find(n=>n.name.toUpperCase()===key.toUpperCase()),drawing=['D','FC'].map(kind=>names.find(n=>n.name.toUpperCase().startsWith(key.toUpperCase()+'+'+kind)&&new RegExp('\\+'+kind+'\\d+$','i').test(n.name))).find(Boolean);
  const image=(n:typeof main)=>n?truperURL('https://www.truper.com/media/import/imagenes/'+n.name+'.'+n.ext,'image'):'';
  return {product:{code,description,key,brand,dimensions,installation,source:truperURL(source),specs},imageURL:image(main),drawingURL:image(drawing)};
 }
