@@ -3,7 +3,7 @@
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitor-incomplete-drafts-1';
+const API_BUILD = 'exhibitor-loading-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -84,7 +84,13 @@ export async function setting(key:string,value?:string){
  const rows=await supa('/rest/v1/rh_settings?select=value&key=eq.'+encodeURIComponent(key));return rows[0]?.value;
 }
 let tokenCache:{token:string;until:number}|undefined;
+let tokenPending:Promise<string>|undefined;
 export async function dbxToken(){
+ if(tokenCache&&Date.now()<tokenCache.until)return tokenCache.token;
+ if(!tokenPending)tokenPending=refreshDbxToken();
+ try{return await tokenPending;}finally{tokenPending=undefined;}
+}
+async function refreshDbxToken(){
  if(tokenCache&&Date.now()<tokenCache.until)return tokenCache.token;
  const c=config();if(!c.dbxKey||!c.dbxSecret)throw new PortalError(503,'Falta configurar la aplicación de Dropbox.');
  const stored=c.refresh||await setting('dropbox_refresh');const refresh=c.refresh?stored:stored?await encrypted(stored,true):null;
@@ -449,12 +455,17 @@ export function exhibitImageRequest(dataUrl:string,binary:boolean,original?:Blob
 function exhibitStoreIds(u:any):string[]{return Array.isArray(u?.app_metadata?.exhibit_store_ids)?[...new Set((u.app_metadata.exhibit_store_ids.filter(uuid) as string[]).map(v=>v.toLowerCase()))]:[];}
 async function exhibitRoot(store:any){const folder=await liveFolder(store);return folder.path_display+'/exhibidores';}
 async function ensureExhibitFolders(root:string){for(const path of [root,root+'/registros',root+'/imagenes']){try{await dbx('files/create_folder_v2',{path,autorename:false});}catch(e){if(!(e instanceof PortalError)||e.status!==409)throw e;const f=await dbx('files/get_metadata',{path});if(f['.tag']!=='folder')throw new PortalError(409,'Hay un archivo ocupando la carpeta de exhibidores.');}}}
-async function exhibitRead(root:string,id:string){
+const exhibitReadCache=new Map<string,{record:ExhibitRecord;size:number;until:number}>();let exhibitReadCacheBytes=0;
+async function exhibitRead(root:string,id:string,listedMeta?:any){
  if(!uuid(id))throw new PortalError(404,'Exhibidor no disponible.');
- let meta:any;try{meta=await dbx('files/get_metadata',{path:root+'/registros/'+id+'.json'});}catch(e){if(e instanceof DropboxNotFound)throw new PortalError(404,'Exhibidor no disponible.');throw e;}
+ let meta:any;try{meta=listedMeta||await dbx('files/get_metadata',{path:root+'/registros/'+id+'.json'});}catch(e){if(e instanceof DropboxNotFound)throw new PortalError(404,'Exhibidor no disponible.');throw e;}
  if(meta['.tag']!=='file'||meta.size>800000||String(meta.path_lower)!==(root+'/registros/'+id+'.json').toLowerCase())throw new PortalError(404,'Exhibidor no disponible.');
+ const cacheKey=root+'/'+id+':'+meta.rev;const cached=exhibitReadCache.get(cacheKey);if(cached&&Date.now()<cached.until)return structuredClone(cached.record);
  const response=await content('files/download',{path:meta.id});const bytes=await bounded(response,800000);let saved:any;try{saved=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new PortalError(502,'El archivo del exhibidor no se puede leer.');}
- return {id,revision:meta.rev,updatedAt:meta.server_modified,data:validateExhibit(saved.data)} as ExhibitRecord;
+ const record={id,revision:meta.rev,updatedAt:meta.server_modified,data:validateExhibit(saved.data)} as ExhibitRecord;
+ for(const [key,value]of exhibitReadCache){if(value.until<Date.now()||exhibitReadCacheBytes+bytes.length>8000000||exhibitReadCache.size>=64){exhibitReadCache.delete(key);exhibitReadCacheBytes-=value.size;}}
+ if(exhibitReadCache.has(cacheKey)){exhibitReadCacheBytes-=exhibitReadCache.get(cacheKey)!.size;exhibitReadCache.delete(cacheKey);}
+ exhibitReadCache.set(cacheKey,{record:structuredClone(record),size:bytes.length,until:Date.now()+300000});exhibitReadCacheBytes+=bytes.length;return record;
 }
 async function exhibitWrite(path:string,bytes:Uint8Array,revision?:string){
  const response=await fetch('https://content.dropboxapi.com/2/files/upload',{method:'POST',headers:{Authorization:'Bearer '+await dbxToken(),'Dropbox-API-Arg':headerJSON({path,mode:revision?{'.tag':'update',update:revision}:'add',autorename:false,mute:true,strict_conflict:true}),'Content-Type':'application/octet-stream'},body:bytes});
@@ -683,12 +694,14 @@ async function accessoryRoutes(r:Request,p:string[],user:any){
 
 async function exhibitRoutes(r:Request,p:string[],user:any){
  const method=r.method,query=new URL(r.url).searchParams;
- const store=await requireStore(query.get('store'),user,'exhibitors'),root=await exhibitRoot(store),admin=user.app_metadata.role==='admin';
+ const store=await requireStore(query.get('store'),user,'exhibitors'),admin=user.app_metadata.role==='admin';
  if(p.length===2&&p[1]==='truper'&&method==='POST'){membership(user,true);const b=await bodyJSON(r);if(typeof b.code!=='string'||(b.source!==undefined&&typeof b.source!=='string')||String(b.source||'').length>1500)throw new PortalError(400,'Revisa el código y la ficha oficial.');try{return json(await fetchTruperProduct(b.code.trim(),b.source?.trim()||''));}catch(e){throw new PortalError(422,(e as Error).name==='TimeoutError'?'Truper tardó demasiado en responder. Intenta de nuevo más tarde.':(e as Error).message);}}
+ const root=await exhibitRoot(store);
  if(p.length===1&&method==='GET'){
   let listing:any;const cursor=query.get('cursor');
   try{if(cursor){const t=await unseal('exhibit-list',cursor);if(t.uid!==user.id||t.store!==store.id||t.expires<Date.now())throw new PortalError(400,'Actualiza la lista de exhibidores.');listing=await dbx('files/list_folder/continue',{cursor:t.cursor});}else listing=await dbx('files/list_folder',{path:root+'/registros',limit:100,recursive:false});}catch(e){if(e instanceof DropboxNotFound)return json({exhibitors:[],next:null});throw e;}
-  const items=[];for(const f of listing.entries){const id=String(f.name).replace(/\.json$/,'');if(f['.tag']!=='file'||!uuid(id))continue;const rec=await exhibitRead(root,id);if(admin||rec.data.published)items.push({id:rec.id,revision:rec.revision,updatedAt:rec.updatedAt,name:rec.data.name,project:rec.data.project,count:rec.data.products.length,published:rec.data.published});}
+  const items=[];const entries=listing.entries.filter((f:any)=>f['.tag']==='file'&&uuid(String(f.name).replace(/\.json$/,'')));
+  for(let i=0;i<entries.length;i+=6){const group=await Promise.all(entries.slice(i,i+6).map(async(f:any)=>{const rec=await exhibitRead(root,String(f.name).replace(/\.json$/,''),cursor?undefined:f);return admin||rec.data.published?{id:rec.id,revision:rec.revision,updatedAt:rec.updatedAt,name:rec.data.name,project:rec.data.project,count:rec.data.products.length,published:rec.data.published,photo:rec.data.photo}:null;}));items.push(...group.filter(Boolean));}
   return json({exhibitors:items,next:listing.has_more?await seal('exhibit-list',{uid:user.id,store:store.id,cursor:listing.cursor,expires:Date.now()+900000}):null});
  }
  if(p.length===2&&p[1]==='assets'&&method==='POST'){
