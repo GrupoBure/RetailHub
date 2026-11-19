@@ -1,9 +1,10 @@
+import { Buffer } from 'node:buffer';
 // Retail Hub · Supabase Edge Function: retailhub-api
 // No credentials belong in this file. Deploy with gateway Verify JWT OFF;
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibitor-families-1';
+const API_BUILD = 'native-image-encoding-2';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -31,6 +32,8 @@ export const config = () => {
 };
 export const authReady=()=>{const c=config();return !!(c.url&&c.anon&&c.service);};
 export const json=(data:unknown,status=200,extra:HeadersInit={})=>new Response(JSON.stringify(data),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store',...extra}});
+// Encode raster bytes natively: spreading multi-MB arrays into JS strings exhausts Edge CPU.
+export const rasterDataURL=(bytes:Uint8Array,mime:string)=>'data:'+mime+';base64,'+Buffer.from(bytes.buffer,bytes.byteOffset,bytes.byteLength).toString('base64');
 export function sameOrigin(r:Request){const o=r.headers.get('origin');if(o && !allowedOrigin(o))throw new PortalError(403,'Solicitud no permitida.');}
 const bearer=(r:Request)=>r.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]||'';
 function membership(u:any,admin=false){
@@ -719,7 +722,7 @@ async function exhibitRoutes(r:Request,p:string[],user:any){
  if(p.length===4&&p[2]==='assets'&&method==='GET'){
   if(!exhibitAssetName(p[3])||!exhibitAssets(rec.data).includes(p[3]))throw new PortalError(404,'Imagen no disponible.');
   const f=await dbx('files/get_metadata',{path:root+'/imagenes/'+p[3]});if(f['.tag']!=='file'||f.size>10000000||String(f.path_lower)!==(root+'/imagenes/'+p[3]).toLowerCase())throw new PortalError(404,'Imagen no disponible.');
-  const bytes=await bounded(await content('files/download',{path:f.id}),10000000);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));const mime=p[3].endsWith('.jpg')?'image/jpeg':p[3].endsWith('.png')?'image/png':'image/webp';return json({dataUrl:'data:'+mime+';base64,'+btoa(binary)});
+  const bytes=await bounded(await content('files/download',{path:f.id}),10000000);const mime=p[3].endsWith('.jpg')?'image/jpeg':p[3].endsWith('.png')?'image/png':'image/webp';return json({dataUrl:rasterDataURL(bytes,mime)});
  }
  if(p.length===2&&(method==='PATCH'||method==='DELETE')){
   membership(user,true);const b=await bodyJSON(r,800000);if(b.revision!==rec.revision)throw new PortalError(409,'El exhibidor cambió. Vuelve a abrirlo antes de guardar.');
@@ -781,7 +784,7 @@ async function mountingRoutes(r:Request,p:string[],user:any){
  const rec=await mountRead(root,p[1]);
  if(p.length===2&&method==='GET')return json({record:rec});
  if(p.length===3&&p[2]==='image'&&method==='GET'){
-  const bytes=await bounded(await content('files/download',{path:root+'/archivos/'+rec.data.image}),10000000);let bin='';for(let i=0;i<bytes.length;i+=32768)bin+=String.fromCharCode(...bytes.subarray(i,i+32768));const ext=rec.data.image.split('.').at(-1);return json({dataUrl:'data:image/'+(ext==='jpg'?'jpeg':ext)+';base64,'+btoa(bin)});
+  const bytes=await bounded(await content('files/download',{path:root+'/archivos/'+rec.data.image}),10000000);const ext=rec.data.image.split('.').at(-1);return json({dataUrl:rasterDataURL(bytes,'image/'+(ext==='jpg'?'jpeg':ext))});
  }
  if(p.length===3&&p[2]==='original'&&method==='GET'){const asset=rec.data.original||rec.data.image;const link=await dbx('files/get_temporary_link',{path:root+'/archivos/'+asset});return json({url:link.link});}
  if(p.length===2&&(method==='PATCH'||method==='DELETE')){
