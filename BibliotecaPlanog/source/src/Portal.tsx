@@ -43,8 +43,10 @@ function LabelingDownloads({api}:{api:(path:string,init?:RequestInit)=>Promise<a
   }catch(e){setError((e as Error).message);}
   finally{setDownloading('');}
  }
+ const archive=files?.find(file=>file.path==='RV__Catalogo_2020_Bartender.zip');
+ const labels=(files||[]).filter(file=>file!==archive);
  const root:LabelFolder={folders:new Map(),files:[]};
- for(const file of [...(files||[])].sort((a,b)=>a.path.localeCompare(b.path,'es'))){
+ for(const file of labels.sort((a,b)=>a.path.localeCompare(b.path,'es'))){
   let folder=root;
   for(const name of file.path.split('/').slice(0,-1)){
    if(!folder.folders.has(name))folder.folders.set(name,{folders:new Map(),files:[]});
@@ -55,12 +57,17 @@ function LabelingDownloads({api}:{api:(path:string,init?:RequestInit)=>Promise<a
  function tree(folder:LabelFolder):ReactNode{
   return <ul>{Array.from(folder.folders,([name,child])=><li key={name}><details><summary>{name}</summary>{tree(child)}</details></li>)}{folder.files.map(file=><li key={file.id}><button className="text-link" disabled={!!downloading} onClick={()=>void download(file)}><Download size={15}/>{file.path.split('/').at(-1)}</button></li>)}</ul>;
  }
- return <details className="soft-note" style={{display:'block'}} onToggle={e=>{if(e.currentTarget.open)void load();}}>
+ return <><details className="soft-note" style={{display:'block'}} onToggle={e=>{if(e.currentTarget.open)void load();}}>
   <summary><b>Etiquetado</b></summary>
   {loading&&<p role="status">Cargando archivos…</p>}
   {error&&<p role="alert">{error} {!files&&<button className="text-link" onClick={()=>void load()}>Reintentar</button>}</p>}
-  {files&&(files.length?tree(root):<p>Aún no hay archivos.</p>)}
- </details>;
+  {files&&(labels.length?tree(root):<p>Aún no hay archivos.</p>)}
+ </details><details className="soft-note" style={{display:'block'}} onToggle={e=>{if(e.currentTarget.open)void load();}}>
+  <summary><b>Catálogo 2020 BarTender</b></summary>
+  {loading&&<p role="status">Cargando archivo…</p>}
+  {error&&<p role="alert">{error} {!files&&<button className="text-link" onClick={()=>void load()}>Reintentar</button>}</p>}
+  {archive?<button className="text-link" disabled={!!downloading} onClick={()=>void download(archive)}><Download size={15}/>Descargar {archive.path}</button>:files&&<p>El ZIP aún no está disponible.</p>}
+ </details></>;
 }
 
 const samples:Doc[]=[['Volteck accesorios · 12 góndolas bajas','Planogramas'],['Llegada del camión · Góndolas','Manuales de montaje'],['Arranque de montaje','Manuales de montaje'],['Montado del planograma','Manuales de montaje'],['Señalización y gráficos de tienda','Gráficos y señalización'],['Recepción de producto','Manuales de montaje']].map(([title,category],i)=>({id:'example'+i,title,category:'Planogramas',filename:title+'.pdf',size:i===0?46227604:0,modified_at:'2026-10-'+(23-i),published:true})).concat([{id:'example-excel',title:'Listado de productos',category:'Listados',filename:'Listado_de_productos.xlsx',size:20480,modified_at:'2026-10-23',published:true}]);
