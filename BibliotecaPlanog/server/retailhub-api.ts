@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'labeling-downloads-2';
+const API_BUILD = 'provider-pending-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -670,6 +670,79 @@ async function labelingRoutes(r:Request,p:string[],user:any){
  return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
 }
 
+const pendingSections=['delivery','improvements','designs'] as const;
+const pendingTables={providers:'/rest/v1/rh_pending_providers',grants:'/rest/v1/rh_pending_permissions',items:'/rest/v1/rh_provider_pending'};
+const pendingFields='id,provider_id,section,title,description,location,suggestion,solution,photo,updated_at,completed_at,completed_by';
+function pendingText(value:unknown,max:number,required=false){
+ if(typeof value!=='string'||value.length>max||(required&&!value.trim()))throw new PortalError(400,'Revisa los campos del pendiente.');
+ return value.trim();
+}
+async function providerPendingRoutes(r:Request,p:string[],user:any){
+ const admin=user.app_metadata.role==='admin',method=r.method;
+ const [_,provider,action,item]=p;
+ const grants=admin?[]:await supa(pendingTables.grants+'?user_id=eq.'+user.id+'&select=provider_id,section,can_edit');
+ if(p.length===1&&method==='GET'){
+  const ids=[...new Set(grants.map((g:any)=>g.provider_id))];
+  if(!admin&&!ids.length)return json({providers:[]});
+  const rows=await supa(pendingTables.providers+'?select=id,name&order=name'+(admin?'':'&id=in.('+ids.join(',')+')'));
+  return json({providers:rows.map((row:any)=>({...row,sections:admin?pendingSections.map(section=>({section,can_edit:true})):grants.filter((g:any)=>g.provider_id===row.id).map(({section,can_edit}:any)=>({section,can_edit}))}))});
+ }
+ if(p.length===1&&method==='POST'){
+  membership(user,true);const b=await bodyJSON(r,2048);
+  const rows=await supa(pendingTables.providers,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({name:pendingText(b.name,100,true)})});
+  return json({provider:rows[0]},201);
+ }
+ if(!uuid(provider))throw new PortalError(404,'Proveedor no disponible.');
+ if(action==='permissions'&&p.length===3){
+  membership(user,true);
+  const filter='?provider_id=eq.'+provider;
+  if(method==='GET')return json({permissions:await supa(pendingTables.grants+filter+'&select=user_id,section,can_edit')});
+  if(method==='PUT'){
+   const b=await bodyJSON(r,2048);
+   if(!uuid(b.user_id)||!pendingSections.includes(b.section)||!['none','view','edit'].includes(b.mode))throw new PortalError(400,'Revisa el permiso.');
+   if(b.mode==='none'){
+    await supa(pendingTables.grants+filter+'&user_id=eq.'+b.user_id+'&section=eq.'+b.section,{method:'DELETE'});
+   }else{
+    const account=await supa('/auth/v1/admin/users/'+b.user_id);
+    membership(account);
+    await supa(pendingTables.grants+'?on_conflict=provider_id,user_id,section',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify({provider_id:provider,user_id:b.user_id,section:b.section,can_edit:b.mode==='edit'})});
+   }
+   return json({ok:true});
+  }
+ }
+ if(action!=='items'||p.length>4)throw new PortalError(404,'Ruta no disponible.');
+ const section=new URL(r.url).searchParams.get('section') as typeof pendingSections[number];
+ const permission=grants.find((g:any)=>g.provider_id===provider&&g.section===section);
+ if(!pendingSections.includes(section)||(!admin&&!permission))throw new PortalError(404,'Sección no disponible.');
+ const filter='provider_id=eq.'+provider+'&section=eq.'+section;
+ if(method==='GET'&&p.length===3){
+  const completed=new URL(r.url).searchParams.get('state')==='completed';
+  return json({items:await supa(pendingTables.items+'?'+filter+'&completed_at='+ (completed?'not.is.null':'is.null')+'&select='+pendingFields+'&order=updated_at.desc&limit=250')});
+ }
+ if(!admin&&!permission.can_edit)throw new PortalError(403,'No tienes permiso para editar esta sección.');
+ if(method==='POST'&&p.length===3||method==='PATCH'&&p.length===4&&uuid(item)){
+  const b=await bodyJSON(r,840000);
+  const values:Record<string,unknown>={updated_at:new Date().toISOString()};
+  if(typeof b.completed==='boolean'&&method==='PATCH'){
+   values.completed_at=b.completed?values.updated_at:null;
+   values.completed_by=b.completed?String(safeUser(user).name||safeUser(user).username||'Usuario').slice(0,100):null;
+  }else{
+   for(const [key,max,required] of [['title',120,true],['description',3000,true],['location',160,false],['suggestion',3000,false],['solution',3000,false]] as const)values[key]=pendingText(b[key]??'',max,required);
+   if(b.photo!==undefined){
+    if(b.photo!==null&&(typeof b.photo!=='string'||b.photo.length>800000||!/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]+={0,2}$/.test(b.photo)))throw new PortalError(400,'Adjunta una foto JPEG válida.');
+    values.photo=b.photo;
+   }
+  }
+  if(method==='POST')Object.assign(values,{provider_id:provider,section});
+  if(method==='PATCH'&&(typeof b.updated_at!=='string'||!Number.isFinite(Date.parse(b.updated_at))))throw new PortalError(400,'Vuelve a abrir el pendiente.');
+  const path=pendingTables.items+(method==='PATCH'?'?'+filter+'&id=eq.'+item+'&updated_at=eq.'+encodeURIComponent(b.updated_at):'');
+  const rows=await supa(path,{method,headers:{Prefer:'return=representation'},body:JSON.stringify(values)});
+  if(!rows.length)throw new PortalError(409,'El pendiente cambió. Actualiza la lista y vuelve a intentarlo.');
+  return json({item:rows[0]},method==='POST'?201:200);
+ }
+ throw new PortalError(404,'Ruta no disponible.');
+}
+
 async function accessoryRoutes(r:Request,p:string[],user:any){
  const root=config().root+'/_accesorios',admin=user.app_metadata.role==='admin',code=p[1];
  if(p.length===1&&r.method==='GET'){
@@ -892,6 +965,7 @@ async function handleRequest(r:Request){
   return new Response(original.body,{headers:{...cors,'Content-Type':mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Disposition':(url.searchParams.has('download')||mime==='application/octet-stream'?'attachment':'inline')+"; filename*=UTF-8''"+encodeURIComponent(e.name).replace(/'/g,'%27')}});
  }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
+ if(p[0]==='provider-pending')return await providerPendingRoutes(r,p,user);
  if(p[0]==='etiquetado')return await labelingRoutes(r,p,user);
  if(p[0]==='graphics')return await graphicsRoutes(r,p,user);
  if(p[0]==='accessories')return await accessoryRoutes(r,p,user);
