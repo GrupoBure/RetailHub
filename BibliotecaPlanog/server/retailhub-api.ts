@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'provider-pending-1';
+const API_BUILD = 'provider-pending-2';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -717,11 +717,16 @@ async function providerPendingRoutes(r:Request,p:string[],user:any){
  const filter='provider_id=eq.'+provider+'&section=eq.'+section;
  if(method==='GET'&&p.length===3){
   const completed=new URL(r.url).searchParams.get('state')==='completed';
-  return json({items:await supa(pendingTables.items+'?'+filter+'&completed_at='+ (completed?'not.is.null':'is.null')+'&select='+pendingFields+'&order=updated_at.desc&limit=250')});
+  return json({items:await supa(pendingTables.items+'?'+filter+'&completed_at='+ (completed?'not.is.null':'is.null')+'&select='+pendingFields+'&order=sort_order.desc,id.asc&limit=250')});
  }
  if(!admin&&!permission.can_edit)throw new PortalError(403,'No tienes permiso para editar esta sección.');
  if(method==='POST'&&p.length===3||method==='PATCH'&&p.length===4&&uuid(item)){
   const b=await bodyJSON(r,840000);
+  if(method==='PATCH'&&b.direction!==undefined){
+   if(!['up','down'].includes(b.direction))throw new PortalError(400,'Dirección no válida.');
+   await supa('/rest/v1/rpc/rh_move_provider_pending',{method:'POST',body:JSON.stringify({p_provider:provider,p_section:section,p_item:item,p_completed:new URL(r.url).searchParams.get('state')==='completed',p_direction:b.direction})});
+   return json({ok:true});
+  }
   const values:Record<string,unknown>={updated_at:new Date().toISOString()};
   if(typeof b.completed==='boolean'&&method==='PATCH'){
    values.completed_at=b.completed?values.updated_at:null;

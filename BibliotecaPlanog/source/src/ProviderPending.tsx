@@ -72,6 +72,13 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
    setDraft(null);setReload(v=>v+1);setNotice('Pendiente guardado.');
   });
  }
+ async function reorder(item:Item,direction:'up'|'down'){
+  await run(async()=>{
+   await send(endpoint+'/'+item.id+params,'PATCH',{direction});
+   setItems((await api(endpoint+params)).items);
+   setNotice('Orden guardado.');
+  });
+ }
  async function move(item:Item){
   await run(async()=>{await send(endpoint+'/'+item.id+params,'PATCH',{completed:!item.completed_at,updated_at:item.updated_at});setReload(v=>v+1);setNotice(item.completed_at?'Pendiente reabierto.':'Enviado a Completados.');});
  }
@@ -112,12 +119,12 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
    {draft?<form className="provider-pending-card provider-pending-grid" onSubmit={save}>
     <div><h2>{draft.id?'Editar pendiente':'Nuevo pendiente'}</h2>{fields.map(([key,label,max])=><label key={key}>{label}{max>160?<textarea maxLength={max} required={key==='description'} rows={3} value={draft[key]} onChange={e=>setDraft(v=>v?{...v,[key]:e.target.value}:v)}/>:<input maxLength={max} required={key==='title'} value={draft[key]} onChange={e=>setDraft(v=>v?{...v,[key]:e.target.value}:v)}/>}</label>)}<div className="provider-pending-tabs"><button className="primary" disabled={busy}>Guardar cambios</button><button type="button" className="secondary" disabled={busy} onClick={()=>setDraft(null)}>Cancelar</button></div></div>
     <div><label>Foto de referencia<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={e=>{const file=e.target.files?.[0];if(file)void run(async()=>{const photo=await photoData(file);setDraft(v=>v?{...v,photo}:v);});}}/></label>{draft.photo&&<><img src={draft.photo} alt="Foto de referencia"/><button type="button" className="secondary" disabled={busy} onClick={()=>setDraft(v=>v?{...v,photo:null}:v)}>Quitar foto</button></>}</div>
-   </form>:loading?<p role="status">Cargando pendientes…</p>:items.length?items.map(item=><details className="provider-pending-card" key={item.id} name="provider-pending-detail" style={{padding:'8px 12px'}}>
+   </form>:loading?<p role="status">Cargando pendientes…</p>:items.length?items.map((item,index)=><article className="provider-pending-card" key={item.id} style={{padding:'8px 12px',display:'flex',flexWrap:'wrap',alignItems:'flex-start',gap:8}}><details name="provider-pending-detail" style={{flex:'1 1 260px',minWidth:0}}>
     <summary aria-label={'Ver detalle: '+item.title} style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto',gap:10,alignItems:'center',cursor:'pointer',listStyle:'none'}}>
-     <span style={{minWidth:0,overflowWrap:'anywhere'}}><strong>{item.title}</strong>{item.location&&<small style={{display:'block',color:'#516570'}}>{item.location}</small>}</span>
+     <span style={{minWidth:0,overflowWrap:'anywhere'}}><strong>{index+1}. {item.title}</strong>{item.location&&<small style={{display:'block',color:'#516570'}}>{item.location}</small>}</span>
      <span className="secondary" style={{padding:'5px 8px',whiteSpace:'nowrap',fontSize:12}}>Ver detalle</span>
     </summary>
-    <div className={item.photo?'provider-pending-grid':undefined} style={{marginTop:10,borderTop:'1px solid #dce5e8',paddingTop:12}}><div><p>{item.description}</p>{item.suggestion&&<p><b>Sugerencia</b> · {item.suggestion}</p>}{item.solution&&<p><b>Solución</b> · {item.solution}</p>}{item.completed_at&&<p><small>Completado por {item.completed_by} el {new Date(item.completed_at).toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}</small></p>}{canEdit&&<div className="provider-pending-tabs"><button className="secondary" disabled={busy} onClick={()=>setDraft(item)}>Editar</button><button className="primary" disabled={busy} onClick={()=>void move(item)}>{item.completed_at?'Reabrir pendiente':'Marcar como completado'}</button></div>}</div>{item.photo&&<img loading="lazy" src={item.photo} alt={'Foto de '+item.title}/>}</div></details>):<p>{completed?'Todavía no hay pendientes completados.':'No hay pendientes abiertos en esta sección.'}</p>}
+    <div className={item.photo?'provider-pending-grid':undefined} style={{marginTop:10,borderTop:'1px solid #dce5e8',paddingTop:12}}><div><p>{item.description}</p>{item.suggestion&&<p><b>Sugerencia</b> · {item.suggestion}</p>}{item.solution&&<p><b>Solución</b> · {item.solution}</p>}{item.completed_at&&<p><small>Completado por {item.completed_by} el {new Date(item.completed_at).toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}</small></p>}{canEdit&&<div className="provider-pending-tabs"><button className="secondary" disabled={busy} onClick={()=>setDraft(item)}>Editar</button><button className="primary" disabled={busy} onClick={()=>void move(item)}>{item.completed_at?'Reabrir pendiente':'Marcar como completado'}</button></div>}</div>{item.photo&&<img loading="lazy" src={item.photo} alt={'Foto de '+item.title}/>}</div></details>{canEdit&&<div style={{display:'flex',gap:4}}><button type="button" className="secondary" style={{padding:'5px 8px'}} aria-label={'Subir '+item.title} title="Subir" disabled={busy||index===0} onClick={()=>void reorder(item,'up')}>↑</button><button type="button" className="secondary" style={{padding:'5px 8px'}} aria-label={'Bajar '+item.title} title="Bajar" disabled={busy||index===items.length-1} onClick={()=>void reorder(item,'down')}>↓</button></div>}</article>):<p>{completed?'Todavía no hay pendientes completados.':'No hay pendientes abiertos en esta sección.'}</p>}
   </>}
  </section>;
 }
