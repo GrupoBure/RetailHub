@@ -6,7 +6,7 @@ const sections={delivery:'Pendientes de entrega',improvements:'Áreas de mejora'
 type Section=keyof typeof sections;
 type Provider={id:string;name:string;sections:{section:Section;can_edit:boolean}[]};
 type Draft={title:string;description:string;location:string;suggestion:string;solution:string;photo:string|null};
-type Item=Draft&{id:string;updated_at:string;completed_at:string|null;completed_by:string|null};
+type Item=Draft&{id:string;updated_at:string;completed_at:string|null;completed_by:string|null;completion_note?:string};
 type User={id:string;name:string;username:string;enabled:boolean;role:string};
 type Grant={user_id:string;section:Section;can_edit:boolean};
 type Request=(path:string,init?:RequestInit)=>Promise<any>;
@@ -37,6 +37,8 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
  const [section,setSection]=useState<Section>('improvements'),[completed,setCompleted]=useState(false);
  const [items,setItems]=useState<Item[]>([]),[reload,setReload]=useState(0),[loading,setLoading]=useState(true);
  const [draft,setDraft]=useState<(Draft&Partial<Item>)|null>(null),[busy,setBusy]=useState(false);
+ const [draftSection,setDraftSection]=useState<Section>('improvements');
+ const [closing,setClosing]=useState<{id:string;note:string}|null>(null);
  const [error,setError]=useState(''),[notice,setNotice]=useState('');
  const [showPermissions,setShowPermissions]=useState(false),[people,setPeople]=useState<User[]>([]),[grants,setGrants]=useState<Grant[]>([]);
  const [person,setPerson]=useState(''),[newProvider,setNewProvider]=useState<string|null>(null);
@@ -47,7 +49,7 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
  const send=(path:string,method:string,body:unknown)=>api(path,{method,body:JSON.stringify(body)});
  function choose(p:Provider|undefined){
   setProviderId(p?.id||'');setSection(p?.sections.find(s=>s.section==='improvements')?.section||p?.sections[0]?.section||'improvements');
-  setCompleted(false);setItems([]);setDraft(null);setShowPermissions(false);setNotice('');setError('');
+  setCompleted(false);setClosing(null);setItems([]);setDraft(null);setShowPermissions(false);setNotice('');setError('');
  }
  async function refreshProviders(id?:string){
   const {providers:rows}=await ref.current('provider-pending');
@@ -67,7 +69,8 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
  async function save(e:FormEvent){
   e.preventDefault();if(!draft)return;
   await run(async()=>{
-   await send(endpoint+(draft.id?'/'+draft.id:'')+params,draft.id?'PATCH':'POST',draft);
+   await send(endpoint+(draft.id?'/'+draft.id:'')+params,draft.id?'PATCH':'POST',draft.id?{...draft,section:draftSection}:draft);
+   if(draft.id&&draftSection!==section)setSection(draftSection);
    if(!draft.id)setCompleted(false);
    setDraft(null);setReload(v=>v+1);setNotice('Pendiente guardado.');
   });
@@ -79,8 +82,8 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
    setNotice('Orden guardado.');
   });
  }
- async function move(item:Item){
-  await run(async()=>{await send(endpoint+'/'+item.id+params,'PATCH',{completed:!item.completed_at,updated_at:item.updated_at});setReload(v=>v+1);setNotice(item.completed_at?'Pendiente reabierto.':'Enviado a Completados.');});
+ async function move(item:Item,note=''){
+  await run(async()=>{await send(endpoint+'/'+item.id+params,'PATCH',{completed:!item.completed_at,updated_at:item.updated_at,completion_note:note});setClosing(null);setReload(v=>v+1);setNotice(item.completed_at?'Pendiente reabierto.':'Enviado a Completados.');});
  }
  async function openPermissions(){
   if(showPermissions){setShowPermissions(false);return;}
@@ -98,7 +101,7 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
   });
  }
  function changeView(key:Section,done:boolean){
-  setSection(key);setCompleted(done);setDraft(null);setError('');setNotice('');
+  setSection(key);setCompleted(done);setClosing(null);setDraft(null);setError('');setNotice('');
  }
  const hasGrant=!!provider;
  return <section className="provider-pending">
@@ -117,14 +120,14 @@ export default function ProviderPending({api,admin}:{api:Request;admin:boolean})
    <div className="provider-pending-tabs" aria-label="Secciones">{provider.sections.map(s=><button key={s.section} type="button" className={section===s.section?'primary':'secondary'} aria-pressed={section===s.section} disabled={busy||!!draft} onClick={()=>changeView(s.section,completed)}>{sections[s.section]}</button>)}</div>
    <div className="provider-pending-tabs" aria-label="Estado del pendiente">{[false,true].map(done=><button key={String(done)} type="button" className={completed===done?'primary':'secondary'} aria-pressed={completed===done} disabled={busy||!!draft} onClick={()=>changeView(section,done)}>{done?'Completados':'Abiertos'}</button>)}</div>
    {draft?<form className="provider-pending-card provider-pending-grid" onSubmit={save}>
-    <div><h2>{draft.id?'Editar pendiente':'Nuevo pendiente'}</h2>{fields.map(([key,label,max])=><label key={key}>{label}{max>160?<textarea maxLength={max} required={key==='description'} rows={3} value={draft[key]} onChange={e=>setDraft(v=>v?{...v,[key]:e.target.value}:v)}/>:<input maxLength={max} required={key==='title'} value={draft[key]} onChange={e=>setDraft(v=>v?{...v,[key]:e.target.value}:v)}/>}</label>)}<div className="provider-pending-tabs"><button className="primary" disabled={busy}>Guardar cambios</button><button type="button" className="secondary" disabled={busy} onClick={()=>setDraft(null)}>Cancelar</button></div></div>
+    <div><h2>{draft.id?'Editar pendiente':'Nuevo pendiente'}</h2>{draft.id&&<label>Sección<select value={draftSection} disabled={busy} onChange={e=>setDraftSection(e.target.value as Section)}>{provider.sections.filter(s=>s.can_edit).map(s=><option key={s.section} value={s.section}>{sections[s.section]}</option>)}</select></label>}{fields.map(([key,label,max])=><label key={key}>{label}{max>160?<textarea maxLength={max} required={key==='description'} rows={3} value={draft[key]} onChange={e=>setDraft(v=>v?{...v,[key]:e.target.value}:v)}/>:<input maxLength={max} required={key==='title'} value={draft[key]} onChange={e=>setDraft(v=>v?{...v,[key]:e.target.value}:v)}/>}</label>)}<div className="provider-pending-tabs"><button className="primary" disabled={busy}>Guardar cambios</button><button type="button" className="secondary" disabled={busy} onClick={()=>setDraft(null)}>Cancelar</button></div></div>
     <div><label>Foto de referencia<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={e=>{const file=e.target.files?.[0];if(file)void run(async()=>{const photo=await photoData(file);setDraft(v=>v?{...v,photo}:v);});}}/></label>{draft.photo&&<><img src={draft.photo} alt="Foto de referencia"/><button type="button" className="secondary" disabled={busy} onClick={()=>setDraft(v=>v?{...v,photo:null}:v)}>Quitar foto</button></>}</div>
    </form>:loading?<p role="status">Cargando pendientes…</p>:items.length?items.map((item,index)=><article className="provider-pending-card" key={item.id} style={{padding:'8px 12px',display:'flex',flexWrap:'wrap',alignItems:'flex-start',gap:8}}><details name="provider-pending-detail" style={{flex:'1 1 260px',minWidth:0}}>
     <summary aria-label={'Ver detalle: '+item.title} style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto',gap:10,alignItems:'center',cursor:'pointer',listStyle:'none'}}>
      <span style={{minWidth:0,overflowWrap:'anywhere'}}><strong>{index+1}. {item.title}</strong>{item.location&&<small style={{display:'block',color:'#516570'}}>{item.location}</small>}</span>
      <span className="secondary" style={{padding:'5px 8px',whiteSpace:'nowrap',fontSize:12}}>Ver detalle</span>
     </summary>
-    <div className={item.photo?'provider-pending-grid':undefined} style={{marginTop:10,borderTop:'1px solid #dce5e8',paddingTop:12}}><div><p>{item.description}</p>{item.suggestion&&<p><b>Sugerencia</b> · {item.suggestion}</p>}{item.solution&&<p><b>Solución</b> · {item.solution}</p>}{item.completed_at&&<p><small>Completado por {item.completed_by} el {new Date(item.completed_at).toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}</small></p>}{canEdit&&<div className="provider-pending-tabs"><button className="secondary" disabled={busy} onClick={()=>setDraft(item)}>Editar</button><button className="primary" disabled={busy} onClick={()=>void move(item)}>{item.completed_at?'Reabrir pendiente':'Marcar como completado'}</button></div>}</div>{item.photo&&<img loading="lazy" src={item.photo} alt={'Foto de '+item.title}/>}</div></details>{canEdit&&<div style={{display:'flex',gap:4}}><button type="button" className="secondary" style={{padding:'5px 8px'}} aria-label={'Subir '+item.title} title="Subir" disabled={busy||index===0} onClick={()=>void reorder(item,'up')}>↑</button><button type="button" className="secondary" style={{padding:'5px 8px'}} aria-label={'Bajar '+item.title} title="Bajar" disabled={busy||index===items.length-1} onClick={()=>void reorder(item,'down')}>↓</button></div>}</article>):<p>{completed?'Todavía no hay pendientes completados.':'No hay pendientes abiertos en esta sección.'}</p>}
+    <div className={item.photo?'provider-pending-grid':undefined} style={{marginTop:10,borderTop:'1px solid #dce5e8',paddingTop:12}}><div><p>{item.description}</p>{item.suggestion&&<p><b>Sugerencia</b> · {item.suggestion}</p>}{item.solution&&<p><b>Solución</b> · {item.solution}</p>}{item.completed_at&&item.completion_note&&<p><b>Cómo se completó</b> · {item.completion_note}</p>}{item.completed_at&&<p><small>Completado por {item.completed_by} el {new Date(item.completed_at).toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}</small></p>}{canEdit&&<div className="provider-pending-tabs"><button className="secondary" disabled={busy} onClick={()=>{setClosing(null);setDraftSection(section);setDraft(item);}}>Editar</button><button className="primary" disabled={busy} onClick={()=>{if(item.completed_at)void move(item);else setClosing({id:item.id,note:''});}}>{item.completed_at?'Reabrir pendiente':'Marcar como completado'}</button></div>}{canEdit&&closing?.id===item.id&&!item.completed_at&&<form onSubmit={e=>{e.preventDefault();void move(item,closing.note);}} style={{marginTop:12}}><label>Cómo se completó (opcional)<textarea rows={3} maxLength={3000} disabled={busy} value={closing.note} onChange={e=>setClosing({id:item.id,note:e.target.value})}/></label><div className="provider-pending-tabs"><button className="primary" disabled={busy}>Confirmar como completado</button><button type="button" className="secondary" disabled={busy} onClick={()=>setClosing(null)}>Cancelar</button></div></form>}</div>{item.photo&&<img loading="lazy" src={item.photo} alt={'Foto de '+item.title}/>}</div></details>{canEdit&&<div style={{display:'flex',gap:4}}><button type="button" className="secondary" style={{padding:'5px 8px'}} aria-label={'Subir '+item.title} title="Subir" disabled={busy||index===0} onClick={()=>void reorder(item,'up')}>↑</button><button type="button" className="secondary" style={{padding:'5px 8px'}} aria-label={'Bajar '+item.title} title="Bajar" disabled={busy||index===items.length-1} onClick={()=>void reorder(item,'down')}>↓</button></div>}</article>):<p>{completed?'Todavía no hay pendientes completados.':'No hay pendientes abiertos en esta sección.'}</p>}
   </>}
  </section>;
 }

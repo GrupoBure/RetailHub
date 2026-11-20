@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'provider-pending-2';
+const API_BUILD = 'provider-pending-3';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -672,7 +672,7 @@ async function labelingRoutes(r:Request,p:string[],user:any){
 
 const pendingSections=['delivery','improvements','designs'] as const;
 const pendingTables={providers:'/rest/v1/rh_pending_providers',grants:'/rest/v1/rh_pending_permissions',items:'/rest/v1/rh_provider_pending'};
-const pendingFields='id,provider_id,section,title,description,location,suggestion,solution,photo,updated_at,completed_at,completed_by';
+const pendingFields='id,provider_id,section,title,description,location,suggestion,solution,photo,updated_at,completed_at,completed_by,completion_note';
 function pendingText(value:unknown,max:number,required=false){
  if(typeof value!=='string'||value.length>max||(required&&!value.trim()))throw new PortalError(400,'Revisa los campos del pendiente.');
  return value.trim();
@@ -730,8 +730,14 @@ async function providerPendingRoutes(r:Request,p:string[],user:any){
   const values:Record<string,unknown>={updated_at:new Date().toISOString()};
   if(typeof b.completed==='boolean'&&method==='PATCH'){
    values.completed_at=b.completed?values.updated_at:null;
-   values.completed_by=b.completed?String(safeUser(user).name||safeUser(user).username||'Usuario').slice(0,100):null;
+   values.completed_by=b.completed?String(safeUser(user).username||'Usuario').slice(0,100):null;
+   values.completion_note=b.completed?pendingText(b.completion_note??'',3000):'';
   }else{
+   if(method==='PATCH'&&b.section!==undefined){
+    if(!pendingSections.includes(b.section))throw new PortalError(400,'Sección no válida.');
+    if(!admin&&!grants.some((g:any)=>g.provider_id===provider&&g.section===b.section&&g.can_edit))throw new PortalError(403,'No tienes permiso para editar la sección de destino.');
+    values.section=b.section;
+   }
    for(const [key,max,required] of [['title',120,true],['description',3000,true],['location',160,false],['suggestion',3000,false],['solution',3000,false]] as const)values[key]=pendingText(b[key]??'',max,required);
    if(b.photo!==undefined){
     if(b.photo!==null&&(typeof b.photo!=='string'||b.photo.length>800000||!/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]+={0,2}$/.test(b.photo)))throw new PortalError(400,'Adjunta una foto JPEG válida.');
