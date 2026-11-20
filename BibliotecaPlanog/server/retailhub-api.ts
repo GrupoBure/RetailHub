@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'labeling-downloads-1';
+const API_BUILD = 'labeling-downloads-2';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -641,7 +641,8 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
 const labelingStoreId='20495f4b-dbe5-4aea-b025-a885ad817a83';
 const labelingFile=(file:any,root:string)=>file?.['.tag']==='file'
  &&String(file.path_lower||'').startsWith(root.toLowerCase()+'/')
- &&/\.(?:btw|pdf|xlsx|jpg|otf|ttf)$/i.test(String(file.name))
+ &&(/\.(?:btw|pdf|xlsx|jpg|otf|ttf)$/i.test(String(file.name))
+  ||String(file.path_lower)===(root+'/RV__Catalogo_2020_Bartender.zip').toLowerCase())
  &&/^id:[A-Za-z0-9_-]+$/.test(String(file.id))
  &&Number.isSafeInteger(file.size)&&file.size>0&&file.size<=10000000;
 async function labelingRoutes(r:Request,p:string[],user:any){
