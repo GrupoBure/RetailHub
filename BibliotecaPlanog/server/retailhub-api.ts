@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 // protected routes verify the caller with Supabase Auth below.
 const FRONTEND = 'https://grupobure.github.io/RetailHub/BibliotecaPlanog/';
 const API_VERSION = '2026-10-24-stores';
-const API_BUILD = 'exhibit-store-edit-1';
+const API_BUILD = 'labeling-downloads-1';
 const ORIGIN = new URL(FRONTEND).origin;
 const FRONTENDS:Record<string,string> = {
  [ORIGIN]:FRONTEND,
@@ -129,7 +129,7 @@ type Section='Planogramas'|'Listados';
 const fileSection=(name:string):Section|null=>/\.pdf$/i.test(name)?'Planogramas':/\.(xlsx|xls)$/i.test(name)?'Listados':null;
 function sectionName(value:unknown):Section|null{const v=typeof value==='string'?value.toLowerCase():'';return v==='planogramas'?'Planogramas':v==='listados'?'Listados':null;}
 function sectionForPath(path:string,storePath:string,filename:string):Section|null{
- const prefix=storePath.toLowerCase()+'/';if(!path.toLowerCase().startsWith(prefix))return null;const parts=path.slice(prefix.length).split('/');if(parts.length<2)return null;
+ const prefix=storePath.toLowerCase()+'/';if(!path.toLowerCase().startsWith(prefix))return null;const parts=path.slice(prefix.length).split('/');if(parts.length<2||parts[0].toLowerCase()==='planogramas'&&parts[1].toLowerCase()==='etiquetado')return null;
  const section=sectionName(parts[0]);return section&&section===fileSection(filename)?section:null;
 }
 const fileMime=(filename:string)=>/\.pdf$/i.test(filename)?'application/pdf':/\.xlsx$/i.test(filename)?'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'application/vnd.ms-excel';
@@ -201,7 +201,7 @@ export async function record(e:any,cache=new Map<string,any>()){
  if(!path.startsWith(root)||!fileSection(String(e.name)))return null;
  const parts=(e.path_display||e.path_lower).slice(config().root.length+1).split('/');
  // Files must be in a store and its matching fixed section.
- if(parts.length<3)return null;
+ if(parts.length<3||parts[1].toLowerCase()==='planogramas'&&parts[2].toLowerCase()==='etiquetado')return null;
  const section=sectionName(parts[1]);if(!section||section!==fileSection(e.name))return null;
  const storePath=root+path.slice(root.length).split('/')[0];let store=cache.get(storePath);
  if(!store){const folder=await dbx('files/get_metadata',{path:storePath});store=await saveStoreFolder(folder);if(store.enabled)await ensureSectionFolders(folder);cache.set(storePath,store);}
@@ -637,6 +637,38 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
  }
  throw new PortalError(404,'Ruta no encontrada.');
 }
+
+const labelingStoreId='20495f4b-dbe5-4aea-b025-a885ad817a83';
+const labelingFile=(file:any,root:string)=>file?.['.tag']==='file'
+ &&String(file.path_lower||'').startsWith(root.toLowerCase()+'/')
+ &&/\.(?:btw|pdf|xlsx|jpg|otf|ttf)$/i.test(String(file.name))
+ &&/^id:[A-Za-z0-9_-]+$/.test(String(file.id))
+ &&Number.isSafeInteger(file.size)&&file.size>0&&file.size<=10000000;
+async function labelingRoutes(r:Request,p:string[],user:any){
+ const store=await requireStore(labelingStoreId,user);
+ const folder=await liveFolder(store);
+ const root=folder.path_display+'/planogramas/Etiquetado';
+ if(r.method!=='GET')throw new PortalError(404,'Ruta no disponible.');
+ if(p.length===1){
+  let page=await dbx('files/list_folder',{path:root,recursive:true,limit:200});
+  const files=[];
+  while(true){
+   for(const file of page.entries){
+    if(labelingFile(file,root))files.push({id:file.id,path:String(file.path_display||file.path_lower).slice(root.length+1)});
+   }
+   if(!page.has_more)break;
+   page=await dbx('files/list_folder/continue',{cursor:page.cursor});
+  }
+  return json({files});
+ }
+ const id=p.length===2?p[1].replace(/^id%3a/i,'id:'):'';
+ if(!/^id:[A-Za-z0-9_-]+$/.test(id))throw new PortalError(404,'Archivo no disponible.');
+ const file=await dbx('files/get_metadata',{path:id});
+ if(!labelingFile(file,root))throw new PortalError(404,'Archivo no disponible en Etiquetado.');
+ const upstream=await content('files/download',{path:file.path_lower});
+ return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+}
+
 async function accessoryRoutes(r:Request,p:string[],user:any){
  const root=config().root+'/_accesorios',admin=user.app_metadata.role==='admin',code=p[1];
  if(p.length===1&&r.method==='GET'){
@@ -859,6 +891,7 @@ async function handleRequest(r:Request){
   return new Response(original.body,{headers:{...cors,'Content-Type':mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Disposition':(url.searchParams.has('download')||mime==='application/octet-stream'?'attachment':'inline')+"; filename*=UTF-8''"+encodeURIComponent(e.name).replace(/'/g,'%27')}});
  }
  const admin=['users','sync','connections','upload','dropbox'].includes(p[0]); const user=await requireUser(r,admin);
+ if(p[0]==='etiquetado')return await labelingRoutes(r,p,user);
  if(p[0]==='graphics')return await graphicsRoutes(r,p,user);
  if(p[0]==='accessories')return await accessoryRoutes(r,p,user);
  if(p[0]==='mounting')return await mountingRoutes(r,p,user);
