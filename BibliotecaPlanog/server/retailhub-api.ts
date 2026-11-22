@@ -639,18 +639,45 @@ async function graphicsRoutes(r:Request,p:string[],user:any){
 }
 
 const labelingStoreId='20495f4b-dbe5-4aea-b025-a885ad817a83';
+const labelingArchive='RV__Catalogo_2020_Bartender.zip';
+const labelingExtensions=/\.(?:btw|pdf|xlsx|jpg|otf|ttf)$/i;
 const labelingFile=(file:any,root:string)=>file?.['.tag']==='file'
  &&String(file.path_lower||'').startsWith(root.toLowerCase()+'/')
- &&(/\.(?:btw|pdf|xlsx|jpg|otf|ttf)$/i.test(String(file.name))
-  ||String(file.path_lower)===(root+'/RV__Catalogo_2020_Bartender.zip').toLowerCase())
+ &&(labelingExtensions.test(String(file.name))
+  ||String(file.path_lower)===(root+'/'+labelingArchive).toLowerCase())
  &&/^id:[A-Za-z0-9_-]+$/.test(String(file.id))
  &&Number.isSafeInteger(file.size)&&file.size>0&&file.size<=10000000;
 async function labelingRoutes(r:Request,p:string[],user:any){
+ if(r.method!=='GET')membership(user,true);
  const store=await requireStore(labelingStoreId,user);
  const folder=await liveFolder(store);
  const root=folder.path_display+'/planogramas/Etiquetado';
- if(r.method!=='GET')throw new PortalError(404,'Ruta no disponible.');
+ if(r.method==='POST'&&p.length===1){
+  const params=new URL(r.url).searchParams;
+  const name=(params.get('name')||'').normalize('NFC');
+  const validSegment=(part:string)=>!!part.trim()&&part===part.trim()&&part!=='.'&&part!=='..'&&part.length<=180&&!/[\\/\u0000-\u001f]/.test(part);
+  const relativeFolder=params.get('folder')||'';
+  if(!validSegment(name)||(relativeFolder&&!relativeFolder.split('/').every(validSegment)))throw new PortalError(400,'Revisa el nombre del archivo y la carpeta.');
+  const archive=params.get('archive')==='1';
+  if(archive?!/\.zip$/i.test(name):!labelingExtensions.test(name))throw new PortalError(400,archive?'Selecciona un archivo ZIP.':'Selecciona un archivo BTW, PDF, XLSX, JPG, OTF o TTF.');
+  const replaceId=params.get('replace');
+  let path=archive?root+'/'+labelingArchive:[root,relativeFolder,name].filter(Boolean).join('/');
+  let mode:string|{'.tag':string;update:string}='add';
+  if(replaceId){
+   if(!/^id:[A-Za-z0-9_-]+$/.test(replaceId))throw new PortalError(400,'Archivo no válido.');
+   const file=await dbx('files/get_metadata',{path:replaceId});
+   if(!labelingFile(file,root))throw new PortalError(404,'Archivo no disponible en Etiquetado.');
+   if(file.name.split('.').at(-1)?.toLowerCase()!==name.split('.').at(-1)?.toLowerCase())throw new PortalError(400,'El reemplazo debe tener la misma extensión.');
+   path=file.path_lower;
+   mode={'.tag':'update',update:file.rev};
+  }
+  const bytes=await bounded(r,10000000);
+  if(!bytes.length)throw new PortalError(400,'Selecciona un archivo que no esté vacío.');
+  await content('files/upload',{path,mode,autorename:false,strict_conflict:true},bytes);
+  return json({ok:true});
+ }
  if(p.length===1){
+  if(r.method!=='GET')throw new PortalError(404,'Ruta no disponible.');
   let page=await dbx('files/list_folder',{path:root,recursive:true,limit:200});
   const files=[];
   while(true){
@@ -666,6 +693,11 @@ async function labelingRoutes(r:Request,p:string[],user:any){
  if(!/^id:[A-Za-z0-9_-]+$/.test(id))throw new PortalError(404,'Archivo no disponible.');
  const file=await dbx('files/get_metadata',{path:id});
  if(!labelingFile(file,root))throw new PortalError(404,'Archivo no disponible en Etiquetado.');
+ if(r.method==='DELETE'){
+  await dbx('files/delete_v2',{path:id,parent_rev:file.rev});
+  return json({ok:true});
+ }
+ if(r.method!=='GET')throw new PortalError(404,'Ruta no disponible.');
  const upstream=await content('files/download',{path:file.path_lower});
  return new Response(upstream.body,{headers:{...cors,'Content-Type':'application/octet-stream','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
 }
