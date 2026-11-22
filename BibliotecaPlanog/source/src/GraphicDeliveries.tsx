@@ -1,5 +1,5 @@
 import {Fragment,useEffect,useRef,useState} from 'react';
-import {Check,ChevronLeft,ChevronRight,Download,Pencil,Plus,RefreshCw,Trash2} from 'lucide-react';
+import {Check,ChevronLeft,ChevronRight,Download,Pencil,Plus,RefreshCw,Trash2,Upload} from 'lucide-react';
 import {tabularWorkbook} from './activity-model';
 import './graphic-deliveries.css';
 
@@ -15,6 +15,34 @@ const emptyData=():Data=>({name:'',folder:'',origin:'',family:'',sourceStatus:''
 const clean=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 const deliveryDate=(row:Row)=>row.delivered_at?new Date(row.delivered_at).toLocaleDateString('es-MX',{timeZone:'America/Mexico_City'}):'';
 const articleRows=(data:Data)=>data.articles.length?data.articles:[{...emptyArticle(),description:data.family||''}];
+type ImportRow={id:string|null;data:Data};
+export function parseDeliveryRows(rows:string[][]):ImportRow[]{
+ const aliases=[['codigo'],['nombre del grafico','nombre','grafico'],['clave'],['descripcion','articulo de grupo truper'],['carpeta'],['origen'],['id de grafico'],['ruta de origen']];
+ const header=rows.slice(0,20).findIndex(row=>aliases.slice(0,4).every(options=>options.some(x=>row.some(value=>clean(value)===x))));
+ if(header<0)throw Error('La primera hoja debe tener Código, Nombre del gráfico, Clave y Descripción.');
+ const fields=aliases.map(options=>rows[header].findIndex(value=>options.includes(clean(value))));
+ const grouped=new Map<string,ImportRow>();
+ for(let i=header+1;i<rows.length;i++){
+  if(!rows[i].some(x=>x.trim()))continue;
+  const [code,name,key,description,folder,origin,id,path]=fields.map(j=>rows[i][j]?.trim()||'');
+  const invalid=!name||[code,key,description].some(x=>/^ver (?:detalle|[«"]?articulos)/.test(clean(x)))||
+   [code,name,key,description,folder,origin,path].some((x,j)=>x.length>[32,220,100,350,240,240,1000][j])||
+   (id&&!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id));
+  if(invalid)throw Error(`Revisa la fila ${i+1}: faltan datos o hay valores inválidos. Usa una línea por código.`);
+  const identity=JSON.stringify([name,folder,origin,path]);
+  const groupKey=id?id.toLowerCase():identity;
+  const group=grouped.get(groupKey)||{id:id.toLowerCase()||null,data:{...emptyData(),name,folder,origin,path}};
+  const d=group.data;
+  if(JSON.stringify([d.name,d.folder,d.origin,d.path])!==identity)throw Error(`El ID de la fila ${i+1} corresponde a más de un gráfico.`);
+  if(code||key||description){
+   if(d.articles.length>=200)throw Error(`El gráfico «${name}» supera 200 artículos.`);
+   d.articles.push({...emptyArticle(),code,key,description});
+  }
+  grouped.set(groupKey,group);
+ }
+ if(!grouped.size||grouped.size>4000)throw Error('El archivo debe contener de 1 a 4,000 gráficos.');
+ return [...grouped.values()];
+}
 
 export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boolean}){
  const apiRef=useRef(api);apiRef.current=api;
@@ -23,6 +51,8 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
  const [refresh,setRefresh]=useState(0),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const [filter,setFilter]=useState('all'),[query,setQuery]=useState(''),[page,setPage]=useState(0);
  const [draft,setDraft]=useState<{row?:Row;data:Data}|null>(null),[remove,setRemove]=useState<Row|null>(null);
+ const [replacement,setReplacement]=useState<{name:string;rows:ImportRow[];expected:string[]}|null>(null);
+ const upload=useRef<HTMLInputElement>(null);
  const form=useRef<HTMLFormElement>(null);
  const confirmation=useRef<HTMLDivElement>(null);
  const path='graphics/deliveries/'+store;
@@ -52,11 +82,31 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
  const matches=rows.filter(({data:d,delivered_at})=>(filter==='all'||(filter==='done')===!!delivered_at)&&
   (!needle||clean([d.name,d.folder,d.origin,d.family,...d.articles.flatMap(a=>[a.description,a.key,a.code])].join(' ')).includes(needle)));
  const pages=Math.max(1,Math.ceil(matches.length/pageSize)),current=Math.min(page,pages-1);
+ const storeName=store===martinCarrera?'Martín Carrera':stores.find(s=>s.id===store)?.name||'Tienda';
+ async function previewExcel(file:File){
+  setBusy(true);setError('');setNotice('');setReplacement(null);
+  try{
+   if(!/\.xlsx$/i.test(file.name)||file.size>20000000||!file.size)throw Error('Selecciona un archivo XLSX de hasta 20 MB.');
+   const {readXlsx}=await import('./quote-import');
+   const incoming=parseDeliveryRows(await readXlsx(await file.arrayBuffer(),10001,true));
+   setReplacement({name:file.name,rows:incoming,expected:rows.map(r=>r.revision)});
+  }catch(e){setError((e as Error).message);}
+  finally{setBusy(false);}
+ }
+ async function replaceExcel(){
+  if(!replacement||busy)return;
+  setBusy(true);setError('');
+  try{
+   const result=await api(path+'/replace',{method:'POST',body:JSON.stringify({rows:replacement.rows,expected:replacement.expected})});
+   setReplacement(null);setQuery('');setFilter('all');setLoading(true);setRefresh(x=>x+1);
+   setNotice(`Se cargaron ${result.count} gráficos en ${storeName}.`);
+  }catch(e){setError((e as Error).message);}
+  finally{setBusy(false);}
+ }
  function exportExcel(){
-  const storeName=store===martinCarrera?'Martín Carrera':stores.find(s=>s.id===store)?.name||'Tienda';
-  const table=[['Código','Nombre del gráfico','Clave','Descripción','Estado','Carpeta','Origen','Fecha de entrega','Registró','Tienda'],
-   ...matches.flatMap(row=>articleRows(row.data).map(a=>[a.code,row.data.name,a.key,a.description,row.delivered_at?'Entregado':'Pendiente',row.data.folder,row.data.origin,deliveryDate(row),row.delivered_by||'',storeName]))];
-  const book=tabularWorkbook(table,'Entregas',[15,52,20,64,17,29,29,20,20,22]);
+  const table=[['Código','Nombre del gráfico','Clave','Descripción','Estado','Carpeta','Origen','Fecha de entrega','Registró','Tienda','ID de gráfico','Ruta de origen'],
+   ...matches.flatMap(row=>articleRows(row.data).map(a=>[a.code,row.data.name,a.key,a.description,row.delivered_at?'Entregado':'Pendiente',row.data.folder,row.data.origin,deliveryDate(row),row.delivered_by||'',storeName,row.id,row.data.path]))];
+  const book=tabularWorkbook(table,'Entregas',[15,52,20,64,17,29,29,20,20,22,40,52]);
   const url=URL.createObjectURL(new Blob([book.buffer as ArrayBuffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
   const link=document.createElement('a');
   link.href=url;link.download='Entregas de gráficos - '+storeName.replace(/[\\/:*?"<>|]/g,'-')+'.xlsx';
@@ -90,7 +140,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
  }
  return <section className="panel graphic-deliveries" aria-label="Entregas de gráficos">
   <div className="gd-heading"><div><h2>Entregas de gráficos</h2><p>Marca lo recibido y consulta lo que falta por tienda.</p></div>
-   <label>Tienda<select value={store} disabled={busy||!stores.length} onChange={e=>{if(e.target.value===store)return;setLoading(true);setRows([]);setStore(e.target.value);setDraft(null);setRemove(null);setQuery('');setFilter('all');setNotice('');}}>
+   <label>Tienda<select value={store} disabled={busy||!!replacement||!stores.length} onChange={e=>{if(e.target.value===store)return;setLoading(true);setRows([]);setStore(e.target.value);setDraft(null);setRemove(null);setQuery('');setFilter('all');setNotice('');}}>
     {!stores.length&&<option value="">Sin tiendas disponibles</option>}
     {stores.map(s=><option key={s.id} value={s.id}>{s.id===martinCarrera?'Martín Carrera':s.name}</option>)}
    </select></label>
@@ -98,13 +148,23 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
   {store&&<><div className="gd-filters">
    <label>Buscar<input value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}} placeholder="Gráfico, carpeta, clave o código"/></label>
    <label>Estado<select value={filter} onChange={e=>{setFilter(e.target.value);setPage(0);}}><option value="all">Todos</option><option value="pending">Pendientes</option><option value="done">Entregados</option></select></label>
-   <button className="text-link" type="button" disabled={busy||loading||!!draft||!!remove} onClick={()=>setRefresh(x=>x+1)}><RefreshCw size={15}/>Actualizar</button>
+   <button className="text-link" type="button" disabled={busy||loading||!!draft||!!remove||!!replacement} onClick={()=>setRefresh(x=>x+1)}><RefreshCw size={15}/>Actualizar</button>
    <button className="secondary small" type="button" disabled={busy||loading||!matches.length} onClick={exportExcel}><Download size={16}/>Exportar a Excel</button>
-   {canManage&&<button className="secondary small" type="button" disabled={busy||loading||!!draft||!!remove} onClick={()=>open()}><Plus size={16}/>Agregar fila</button>}
+   {canManage&&<>
+    <input ref={upload} type="file" accept=".xlsx" hidden onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void previewExcel(file);}}/>
+    <button className="secondary small" type="button" disabled={busy||loading||!!draft||!!remove||!!replacement} onClick={()=>upload.current?.click()}><Upload size={16}/>Reemplazar con Excel</button>
+    <button className="secondary small" type="button" disabled={busy||loading||!!draft||!!remove||!!replacement} onClick={()=>open()}><Plus size={16}/>Agregar fila</button>
+   </>}
   </div>
   {!loading&&<p className="gd-count"><strong>{delivered} entregados</strong><span>{rows.length-delivered} pendientes</span><span>{rows.length} en total</span></p>}
   {error&&<p className="error-banner" role="alert">{error}</p>}
   {notice&&<p role="status">{notice}</p>}
+  {replacement&&<div className="gd-editor" role="group" aria-label="Confirmar reemplazo con Excel">
+   <h3>Reemplazar lista de {storeName}</h3>
+   <p><strong>{replacement.name}</strong> cargará {replacement.rows.length} gráficos en lugar de los {rows.length} actuales. Los gráficos que falten en el Excel se quitarán del seguimiento de esta tienda.</p>
+   <p>Las entregas registradas se conservan al coincidir el ID o, cuando falta el ID, un único nombre con la misma carpeta y origen. Los gráficos nuevos quedan pendientes.</p>
+   <div className="gd-actions"><button className="primary danger-button small" disabled={busy} onClick={()=>void replaceExcel()}>{busy?'Reemplazando…':'Confirmar reemplazo'}</button><button className="secondary small" disabled={busy} onClick={()=>setReplacement(null)}>Cancelar</button></div>
+  </div>}
   {draft&&<form ref={form} className="gd-editor" onSubmit={e=>{e.preventDefault();void save('edit',draft.row);}}>
    <h3>{draft.row?'Editar gráfico':'Agregar gráfico'}</h3>
    <div className="gd-edit-grid">
@@ -131,13 +191,13 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
      const d=row.data;
      const articles=articleRows(d);
      return <Fragment key={row.id}>{articles.map((a,i)=><tr key={i}>
-      {i===0&&<td rowSpan={articles.length}>{canManage?<input type="checkbox" checked={!!row.delivered_at} disabled={busy||!!draft||!!remove} aria-label={'Entregado: '+d.name} onChange={()=>void save('toggle',row)}/>:row.delivered_at?<Check size={17} aria-label="Entregado"/>:'Pendiente'}
+{i===0&&<td rowSpan={articles.length}>{canManage?<input type="checkbox" checked={!!row.delivered_at} disabled={busy||!!draft||!!remove||!!replacement} aria-label={'Entregado: '+d.name} onChange={()=>void save('toggle',row)}/>:row.delivered_at?<Check size={17} aria-label="Entregado"/>:'Pendiente'}
        {row.delivered_at&&<small>{deliveryDate(row)}{row.delivered_by?' · '+row.delivered_by:''}</small>}</td>}
       <td>{a.code||'—'}</td>
       {i===0&&<td rowSpan={articles.length}><strong>{d.name}</strong><small>{[d.folder,d.origin].filter(Boolean).join(' · ')}</small></td>}
       <td>{a.key||'—'}</td>
       <td>{a.description||'—'}</td>
-      {i===0&&canManage&&<td rowSpan={articles.length}><div className="gd-actions"><button type="button" className="icon-btn" title="Editar" aria-label={'Editar '+d.name} disabled={busy||!!draft||!!remove} onClick={()=>open(row)}><Pencil size={15}/></button><button type="button" className="icon-btn danger-icon" title="Quitar fila" aria-label={'Quitar '+d.name} disabled={busy||!!draft||!!remove} onClick={()=>{setError('');setRemove(row);}}><Trash2 size={15}/></button></div></td>}
+{i===0&&canManage&&<td rowSpan={articles.length}><div className="gd-actions"><button type="button" className="icon-btn" title="Editar" aria-label={'Editar '+d.name} disabled={busy||!!draft||!!remove||!!replacement} onClick={()=>open(row)}><Pencil size={15}/></button><button type="button" className="icon-btn danger-icon" title="Quitar fila" aria-label={'Quitar '+d.name} disabled={busy||!!draft||!!remove||!!replacement} onClick={()=>{setError('');setRemove(row);}}><Trash2 size={15}/></button></div></td>}
      </tr>)}</Fragment>;
     })}</tbody></table></div>
    {pages>1&&<div className="gd-pagination"><button className="secondary small" disabled={current===0} onClick={()=>setPage(current-1)}><ChevronLeft size={16}/>Anterior</button><span>Página {current+1} de {pages} · {matches.length} gráficos</span><button className="secondary small" disabled={current+1===pages} onClick={()=>setPage(current+1)}>Siguiente<ChevronRight size={16}/></button></div>}
