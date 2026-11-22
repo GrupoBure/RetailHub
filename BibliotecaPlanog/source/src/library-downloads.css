@@ -1,0 +1,43 @@
+.library-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-downloads {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 26px;
+}
+
+.library-download {
+  background: #f5f9fa;
+  border: 1px solid #e2ebef;
+  border-radius: 8px;
+  color: #294d60;
+  font-size: 0.875rem;
+  padding: 0 12px;
+}
+
+.library-download > summary {
+  cursor: pointer;
+  font-weight: 700;
+  padding: 7px 0;
+}
+
+.library-download[open] {
+  padding-bottom: 8px;
+}
+
+.library-download-file {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-download-file .icon-btn {
+  width: 30px;
+  height: 30px;
+}
