@@ -5,9 +5,10 @@
 .graphic-deliveries label{display:grid;gap:5px;font-weight:600}
 .graphic-deliveries :is(input:not([type=checkbox]),select){min-width:0;width:100%;padding:8px 10px;border:1px solid #c9d8df;border-radius:7px;background:white;color:inherit}
 .gd-count{margin:12px 0}
-.gd-table{min-width:650px}
+.gd-table{min-width:850px}
 .gd-table td{white-space:normal;overflow-wrap:anywhere}
-.gd-table td:first-child{width:130px}
+.gd-table th:first-child{width:110px}
+.gd-table td[rowspan]{vertical-align:top}
 .gd-table td:last-child .gd-actions{flex-wrap:nowrap}
 .gd-table small{display:block;color:#537080;margin-top:3px}
 .gd-table input[type=checkbox]{width:19px;height:19px;accent-color:#087c52;cursor:pointer}
