@@ -3,7 +3,7 @@ import {QRequest,QLine,QData,qNormalize} from './quotes-core';
 import {newTaskId} from './dashboard-model';
 export type ImportTable={rows:string[][];message:string};
 const xml=(s:string)=>{const doc=new DOMParser().parseFromString(s,'application/xml');if(doc.querySelector('parsererror'))throw Error('No se pudo leer el archivo Excel.');return doc;};
-export async function readXlsx(buffer:ArrayBuffer):Promise<string[][]>{
+export async function readXlsx(buffer:ArrayBuffer,maxRows=1000,rejectOverflow=false):Promise<string[][]>{
  const bytes=new Uint8Array(buffer),view=new DataView(buffer);let end=-1;
  for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65558);i--)if(view.getUint32(i,true)===0x06054b50){end=i;break;}
  if(end<0)throw Error('El archivo no es un XLSX válido.');const count=view.getUint16(end+10,true);let pos=view.getUint32(end+16,true),expanded=0;const files=new Map<string,string>();
@@ -19,7 +19,9 @@ export async function readXlsx(buffer:ArrayBuffer):Promise<string[][]>{
  const strings=files.has('xl/sharedStrings.xml')?Array.from(xml(files.get('xl/sharedStrings.xml')!).getElementsByTagName('si')).map(v=>v.textContent||''):[];
  let sheet='xl/worksheets/sheet1.xml';const wb=files.get('xl/workbook.xml'),rels=files.get('xl/_rels/workbook.xml.rels');if(wb&&rels){const first=xml(wb).getElementsByTagName('sheet')[0],id=first?.getAttribute('r:id');const rel=Array.from(xml(rels).getElementsByTagName('Relationship')).find(v=>v.getAttribute('Id')===id);const target=rel?.getAttribute('Target');if(target)sheet=target.startsWith('/')?target.slice(1):'xl/'+target;}
  const source=files.get(sheet);if(!source)throw Error('No encontramos la primera hoja del Excel.');
- return Array.from(xml(source).getElementsByTagName('row')).slice(0,1000).map(row=>{const result:string[]=[];for(const cell of Array.from(row.getElementsByTagName('c'))){const ref=cell.getAttribute('r')||'A1';let index=0;for(const c of ref.replace(/\d/g,''))index=index*26+c.charCodeAt(0)-64;const value=cell.getElementsByTagName('v')[0]?.textContent||'';result[index-1]=cell.getAttribute('t')==='s'?strings[Number(value)]||'':cell.getAttribute('t')==='inlineStr'?cell.getElementsByTagName('is')[0]?.textContent||'':value;}return Array.from({length:result.length},(_,i)=>result[i]||'');});
+ const rows=Array.from(xml(source).getElementsByTagName('row'));
+ if(rejectOverflow&&rows.length>maxRows)throw Error('El Excel supera el máximo de '+maxRows+' filas en la primera hoja.');
+ return rows.slice(0,maxRows).map(row=>{const result:string[]=[];for(const cell of Array.from(row.getElementsByTagName('c'))){const ref=cell.getAttribute('r')||'A1';let index=0;for(const c of ref.replace(/\d/g,''))index=index*26+c.charCodeAt(0)-64;if(index<1||index>16384)throw Error('El Excel contiene una columna inválida.');const value=cell.getElementsByTagName('v')[0]?.textContent||'';result[index-1]=cell.getAttribute('t')==='s'?strings[Number(value)]||'':cell.getAttribute('t')==='inlineStr'?cell.getElementsByTagName('is')[0]?.textContent||'':value;}return Array.from({length:result.length},(_,i)=>result[i]||'');});
 }
 export async function readQuoteFile(file:File):Promise<ImportTable>{
  if(file.size>20000000)throw Error('Importa un archivo de hasta 20 MB.');const ext=file.name.split('.').at(-1)?.toLowerCase();
