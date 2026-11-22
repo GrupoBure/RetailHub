@@ -497,6 +497,17 @@ async function graphicFolderSnapshot(folder:unknown){
  const fingerprint=await digest(JSON.stringify(entries.map(e=>[e.id,e.path_lower,e.rev??'',e['.tag']]).sort((a,b)=>String(a[1]).localeCompare(String(b[1])))));
  return {meta,entries,fingerprint,files:entries.filter(e=>e['.tag']==='file').length,folders:entries.filter(e=>e['.tag']==='folder').length};
 }
+function validateGraphicDelivery(data:any){
+ const str=(v:unknown,max:number)=>typeof v==='string'&&v.length<=max;
+ if(!data||!str(data.name,220)||!data.name.trim()||!str(data.folder,240)||!str(data.origin,240)||
+  !str(data.family,300)||!str(data.sourceStatus,120)||!str(data.path,1000)||
+  !Array.isArray(data.articles)||data.articles.length>200||
+  data.articles.some((a:any)=>!a||!str(a.description,350)||!str(a.key,100)||!str(a.code,32)||
+   !str(a.status,150)||!str(a.evidence,180)||!str(a.source,950)||!(a.description.trim()||a.key.trim()||a.code.trim())))throw new PortalError(400,'Revisa los datos de la fila y sus artículos.');
+ return {name:data.name.trim(),folder:data.folder.trim(),origin:data.origin.trim(),family:data.family.trim(),sourceStatus:data.sourceStatus,path:data.path,
+  articles:data.articles.map((a:any)=>({description:a.description.trim(),key:a.key.trim(),code:a.code.trim(),status:a.status,evidence:a.evidence,source:a.source}))};
+}
+
 async function graphicDeliveryRoutes(r:Request,p:string[],user:any){
  const store=await requireStore(p[2],user);
  const table='/rest/v1/rh_graphic_deliveries';
@@ -512,6 +523,18 @@ async function graphicDeliveryRoutes(r:Request,p:string[],user:any){
   return json({rows});
  }
  if(!canManageGraphics(user))throw new PortalError(403,'No tienes permiso para editar entregas de gráficos.');
+ if(p.length===4&&p[3]==='replace'&&r.method==='POST'){
+  const body=await bodyJSON(r,3000000);
+  if(!Array.isArray(body?.rows)||!body.rows.length||body.rows.length>4000||
+     !Array.isArray(body.expected)||body.expected.length>10000||!body.expected.every(uuid)||
+     body.rows.some((x:any)=>!x||(x.id!=null&&!uuid(x.id))))throw new PortalError(400,'La lista de reemplazo no es válida.');
+  const ids=body.rows.flatMap((x:any)=>x.id?[x.id]:[]);
+  if(new Set(ids).size!==ids.length)throw new PortalError(400,'Hay identificadores de gráfico duplicados.');
+  const incoming=body.rows.map((x:any)=>({id:x.id??null,data:validateGraphicDelivery(x.data)}));
+  const count=await supa('/rest/v1/rpc/rh_replace_graphic_deliveries',{method:'POST',body:JSON.stringify({p_store:store.id,p_expected:body.expected,p_rows:incoming})});
+  if(count===-1)throw new PortalError(409,'La lista cambió. Actualízala y revisa el archivo antes de reemplazar.');
+  return json({count});
+ }
  const create=p.length===3&&r.method==='POST';
  const change=p.length===4&&uuid(p[3])&&['PATCH','DELETE'].includes(r.method);
  if(!create&&!change)throw new PortalError(404,'Acción no disponible.');
@@ -522,15 +545,7 @@ async function graphicDeliveryRoutes(r:Request,p:string[],user:any){
  const rowPath=scoped+'&id=eq.'+p[3]+'&revision=eq.'+revision;
  let patch:Record<string,unknown>={};
  if(r.method!=='DELETE'&&(create||body.data!==undefined)){
-  const data=body?.data;
-  const str=(v:unknown,max:number)=>typeof v==='string'&&v.trim().length<=max;
-  if(!data||!str(data.name,220)||!data.name.trim()||!str(data.folder,240)||!str(data.origin,240)||
-   !str(data.family,300)||!str(data.sourceStatus,120)||!str(data.path,1000)||
-   !Array.isArray(data.articles)||data.articles.length>200||
-   data.articles.some((a:any)=>!a||!str(a.description,350)||!str(a.key,100)||!str(a.code,32)||
-    !str(a.status,150)||!str(a.evidence,180)||!str(a.source,950)||!(a.description.trim()||a.key.trim()||a.code.trim())))throw new PortalError(400,'Revisa los datos de la fila y sus artículos.');
-  patch.data={name:data.name.trim(),folder:data.folder.trim(),origin:data.origin.trim(),family:data.family.trim(),sourceStatus:data.sourceStatus,path:data.path,
-   articles:data.articles.map((a:any)=>({description:a.description.trim(),key:a.key.trim(),code:a.code.trim(),status:a.status,evidence:a.evidence,source:a.source}))};
+  patch.data=validateGraphicDelivery(body.data);
  }
  if(r.method!=='DELETE'&&body.delivered!==undefined){
   if(typeof body.delivered!=='boolean')throw new PortalError(400,'El estado de entrega no es válido.');
