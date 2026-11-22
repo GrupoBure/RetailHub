@@ -497,9 +497,59 @@ async function graphicFolderSnapshot(folder:unknown){
  const fingerprint=await digest(JSON.stringify(entries.map(e=>[e.id,e.path_lower,e.rev??'',e['.tag']]).sort((a,b)=>String(a[1]).localeCompare(String(b[1])))));
  return {meta,entries,fingerprint,files:entries.filter(e=>e['.tag']==='file').length,folders:entries.filter(e=>e['.tag']==='folder').length};
 }
+async function graphicDeliveryRoutes(r:Request,p:string[],user:any){
+ const store=await requireStore(p[2],user);
+ const table='/rest/v1/rh_graphic_deliveries';
+ const scoped=table+'?store_id=eq.'+store.id;
+ const fields='id,data,delivered_at,delivered_by,revision';
+ if(p.length===3&&r.method==='GET'){
+  const rows=[];
+  for(let offset=0;;offset+=500){
+   const page=await supa(scoped+'&select='+fields+'&order=position.asc,id.asc&limit=500&offset='+offset);
+   rows.push(...page);
+   if(page.length<500)break;
+  }
+  return json({rows});
+ }
+ if(!canManageGraphics(user))throw new PortalError(403,'No tienes permiso para editar entregas de gráficos.');
+ const create=p.length===3&&r.method==='POST';
+ const change=p.length===4&&uuid(p[3])&&['PATCH','DELETE'].includes(r.method);
+ if(!create&&!change)throw new PortalError(404,'Acción no disponible.');
+ const body=await bodyJSON(r,65536);
+ if(!body||typeof body!=='object'||Array.isArray(body))throw new PortalError(400,'Solicitud no válida.');
+ const revision=body?.revision;
+ if(change&&!uuid(revision))throw new PortalError(400,'Actualiza la fila antes de cambiarla.');
+ const rowPath=scoped+'&id=eq.'+p[3]+'&revision=eq.'+revision;
+ let patch:Record<string,unknown>={};
+ if(r.method!=='DELETE'&&(create||body.data!==undefined)){
+  const data=body?.data;
+  const str=(v:unknown,max:number)=>typeof v==='string'&&v.trim().length<=max;
+  if(!data||!str(data.name,220)||!data.name.trim()||!str(data.folder,240)||!str(data.origin,240)||
+   !str(data.family,300)||!str(data.sourceStatus,120)||!str(data.path,1000)||
+   !Array.isArray(data.articles)||data.articles.length>200||
+   data.articles.some((a:any)=>!a||!str(a.description,350)||!str(a.key,100)||!str(a.code,32)||
+    !str(a.status,150)||!str(a.evidence,180)||!str(a.source,950)||!(a.description.trim()||a.key.trim()||a.code.trim())))throw new PortalError(400,'Revisa los datos de la fila y sus artículos.');
+  patch.data={name:data.name.trim(),folder:data.folder.trim(),origin:data.origin.trim(),family:data.family.trim(),sourceStatus:data.sourceStatus,path:data.path,
+   articles:data.articles.map((a:any)=>({description:a.description.trim(),key:a.key.trim(),code:a.code.trim(),status:a.status,evidence:a.evidence,source:a.source}))};
+ }
+ if(r.method!=='DELETE'&&body.delivered!==undefined){
+  if(typeof body.delivered!=='boolean')throw new PortalError(400,'El estado de entrega no es válido.');
+  patch.delivered_at=body.delivered?new Date().toISOString():null;
+  patch.delivered_by=body.delivered?safeUser(user).username:null;
+ }
+ if(r.method!=='DELETE'&&!Object.keys(patch).length)throw new PortalError(400,'No hay cambios que guardar.');
+ const rows=await supa(create?table+'?select='+fields:rowPath+'&select='+fields,{
+  method:r.method,headers:{Prefer:'return=representation'},
+  ...(r.method==='DELETE'?{}:{body:JSON.stringify(create?{...patch,store_id:store.id}:{...patch,revision:crypto.randomUUID()})})
+ });
+ if(!rows.length)throw new PortalError(409,'Esta fila cambió. Actualiza la lista e intenta de nuevo.');
+ return json({row:rows[0]},create?201:200);
+}
+
 async function graphicsRoutes(r:Request,p:string[],user:any){
  if(r.method==='GET'&&p.length===2&&p[1]==='access')return json({allowed:graphicAccess(user),manage:canManageGraphics(user)});
  if(!graphicAccess(user))throw new PortalError(403,'No tienes acceso a Gráficos.');
+ if(p[1]==='deliveries')return await graphicDeliveryRoutes(r,p,user);
  if(p.length===2&&p[1]==='folder'&&(r.method==='POST'||r.method==='DELETE')){
   if(user.app_metadata?.role!=='admin')throw new PortalError(403,'Solo administradores pueden eliminar carpetas.');
   const b=await bodyJSON(r,8192);
