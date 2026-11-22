@@ -1,4 +1,5 @@
 import GraphicThumbnail from './GraphicThumbnail';
+import GraphicDeliveries from './GraphicDeliveries';
 import GraphicPdfPreview from './GraphicPdfPreview';
 import {useEffect,useRef,useState} from 'react';
 import {Upload,Trash2,RefreshCw,Download,Image,Search,X,LayoutGrid,List} from 'lucide-react';
@@ -39,7 +40,20 @@ function defaultReverse(g:Graphic,items:Graphic[]){
 const faceName=(g:Graphic)=>/^bienvenidoentrada\./i.test(g.name)?'Bienvenida':/^graciasentrada\./i.test(g.name)?'Despedida':graphicName(g);
 const hasDimensions=(s?:GraphicSpec)=>!!s&&s[2]!=null&&s[3]!=null;
 
-export default function Graphics({api,canManage,isAdmin=false,requestUpload=false,onUploadOpened}:{api:Api;canManage:boolean;isAdmin?:boolean;requestUpload?:boolean;onUploadOpened?:()=>void}){
+type GraphicsProps={api:Api;canManage:boolean;isAdmin?:boolean;requestUpload?:boolean;onUploadOpened?:()=>void};
+export default function Graphics(props:GraphicsProps){
+ const [deliveries,setDeliveries]=useState(false);
+ useEffect(()=>{if(props.requestUpload)setDeliveries(false);},[props.requestUpload]);
+ return <>
+  <nav className="gd-tabs" aria-label="Secciones de Gráficos">
+   <button className={deliveries?'secondary small':'primary small'} aria-pressed={!deliveries} onClick={()=>setDeliveries(false)}>Catálogo de gráficos</button>
+   <button className={deliveries?'primary small':'secondary small'} aria-pressed={deliveries} onClick={()=>setDeliveries(true)}>Entregas por tienda</button>
+  </nav>
+  {deliveries?<GraphicDeliveries api={props.api} canManage={props.canManage}/>:<GraphicsCatalog {...props}/>}
+ </>;
+}
+
+function GraphicsCatalog({api,canManage,isAdmin=false,requestUpload=false,onUploadOpened}:GraphicsProps){
  const [realFolders,setRealFolders]=useState<string[]>([]),[uploadOpen,setUploadOpen]=useState(false),[uploadFolder,setUploadFolder]=useState(''),[uploadFile,setUploadFile]=useState<File|null>(null),[assetBusy,setAssetBusy]=useState(false),[assetProgress,setAssetProgress]=useState(0),[assetMessage,setAssetMessage]=useState(''),[assetError,setAssetError]=useState(''),[pendingDelete,setPendingDelete]=useState(false);
  const [folderDelete,setFolderDelete]=useState<{folder:string;files:number;folders:number;ticket:string}|null>(null),[folderConfirm,setFolderConfirm]=useState('');
  const [folderBackup,setFolderBackup]=useState<boolean|null>(null);
