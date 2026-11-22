@@ -21,6 +21,12 @@ globalThis.fetch=async(url,init={})=>{
  const {pathname,searchParams:q}=new URL(url);
  if(pathname==='/auth/v1/user')return json({id:userId,email:'kael@example.invalid',app_metadata:{rh_portal:true,role,graphics_access:graphics,store_ids:[storeA]}});
  if(pathname==='/rest/v1/rh_stores')return json([{id:q.get('id').slice(3),enabled:true}]);
+ if(pathname==='/rest/v1/rpc/rh_replace_graphic_deliveries'){
+  const incoming=JSON.parse(init.body);
+  assert.equal(incoming.p_store,storeA);
+  assert.equal(incoming.p_rows[0].data.articles[0].code,'11622');
+  return json(incoming.p_expected.includes(userId)?-1:incoming.p_rows.length);
+ }
  assert.equal(pathname,'/rest/v1/rh_graphic_deliveries');
  if(init.method==='POST'){
   const row={id:crypto.randomUUID(),revision:crypto.randomUUID(),delivered_at:null,...JSON.parse(init.body)};
@@ -48,6 +54,14 @@ graphics=true;
 assert.equal((await request(storeA,'POST',{}))[0],403);
 role='admin';
 const data={name:'Lija - 11622.jpg',folder:'Cenefas',origin:'Biblioteca',family:'',path:'',sourceStatus:'',articles:[{description:'Lija de agua',key:'LIAG-180',code:'11622',status:'Ficha oficial',evidence:'Nombre',source:''}]};
+const replacement={expected:[],rows:[{id:null,data}]};
+role='reader';
+assert.equal((await request(storeB,'POST',replacement,'replace'))[0],404);
+assert.equal((await request(storeA,'POST',replacement,'replace'))[0],403);
+role='admin';
+assert.equal((await request(storeA,'POST',{...replacement,rows:[]},'replace'))[0],400);
+assert.equal((await request(storeA,'POST',{...replacement,expected:[userId]},'replace'))[0],409);
+assert.deepEqual(await request(storeA,'POST',replacement,'replace'),[200,{count:1}]);
 const [createdStatus,{row:created}]=await request(storeA,'POST',{data});
 assert.equal(createdStatus,201);
 assert.equal(created.data.articles[0].key,'LIAG-180');
