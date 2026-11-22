@@ -1,5 +1,6 @@
-import {useEffect,useRef,useState} from 'react';
-import {Check,ChevronLeft,ChevronRight,Pencil,Plus,RefreshCw,Trash2} from 'lucide-react';
+import {Fragment,useEffect,useRef,useState} from 'react';
+import {Check,ChevronLeft,ChevronRight,Download,Pencil,Plus,RefreshCw,Trash2} from 'lucide-react';
+import {tabularWorkbook} from './activity-model';
 import './graphic-deliveries.css';
 
 type Api=(path:string,init?:RequestInit)=>Promise<any>;
@@ -12,6 +13,8 @@ const pageSize=30;
 const emptyArticle=():Article=>({description:'',key:'',code:'',status:'',evidence:'',source:''});
 const emptyData=():Data=>({name:'',folder:'',origin:'',family:'',sourceStatus:'',path:'',articles:[]});
 const clean=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+const deliveryDate=(row:Row)=>row.delivered_at?new Date(row.delivered_at).toLocaleDateString('es-MX',{timeZone:'America/Mexico_City'}):'';
+const articleRows=(data:Data)=>data.articles.length?data.articles:[{...emptyArticle(),description:data.family||''}];
 
 export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boolean}){
  const apiRef=useRef(api);apiRef.current=api;
@@ -49,6 +52,17 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
  const matches=rows.filter(({data:d,delivered_at})=>(filter==='all'||(filter==='done')===!!delivered_at)&&
   (!needle||clean([d.name,d.folder,d.origin,d.family,...d.articles.flatMap(a=>[a.description,a.key,a.code])].join(' ')).includes(needle)));
  const pages=Math.max(1,Math.ceil(matches.length/pageSize)),current=Math.min(page,pages-1);
+ function exportExcel(){
+  const storeName=store===martinCarrera?'Martín Carrera':stores.find(s=>s.id===store)?.name||'Tienda';
+  const table=[['Código','Nombre del gráfico','Clave','Descripción','Estado','Carpeta','Origen','Fecha de entrega','Registró','Tienda'],
+   ...matches.flatMap(row=>articleRows(row.data).map(a=>[a.code,row.data.name,a.key,a.description,row.delivered_at?'Entregado':'Pendiente',row.data.folder,row.data.origin,deliveryDate(row),row.delivered_by||'',storeName]))];
+  const book=tabularWorkbook(table,'Entregas',[15,52,20,64,17,29,29,20,20,22]);
+  const url=URL.createObjectURL(new Blob([book.buffer as ArrayBuffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+  const link=document.createElement('a');
+  link.href=url;link.download='Entregas de gráficos - '+storeName.replace(/[\\/:*?"<>|]/g,'-')+'.xlsx';
+  document.body.append(link);link.click();link.remove();
+  window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+ }
  function open(row?:Row){
   setError('');setNotice('');setRemove(null);
   setDraft({row,data:row?structuredClone(row.data):emptyData()});
@@ -85,6 +99,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
    <label>Buscar<input value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}} placeholder="Gráfico, carpeta, clave o código"/></label>
    <label>Estado<select value={filter} onChange={e=>{setFilter(e.target.value);setPage(0);}}><option value="all">Todos</option><option value="pending">Pendientes</option><option value="done">Entregados</option></select></label>
    <button className="text-link" type="button" disabled={busy||loading||!!draft||!!remove} onClick={()=>setRefresh(x=>x+1)}><RefreshCw size={15}/>Actualizar</button>
+   <button className="secondary small" type="button" disabled={busy||loading||!matches.length} onClick={exportExcel}><Download size={16}/>Exportar a Excel</button>
    {canManage&&<button className="secondary small" type="button" disabled={busy||loading||!!draft||!!remove} onClick={()=>open()}><Plus size={16}/>Agregar fila</button>}
   </div>
   {!loading&&<p className="gd-count"><strong>{delivered} entregados</strong><span>{rows.length-delivered} pendientes</span><span>{rows.length} en total</span></p>}
@@ -111,16 +126,19 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
   {remove&&<div ref={confirmation} className="gd-editor" role="group" aria-label="Confirmar retiro"><p>¿Quitar <strong>{remove.data.name}</strong> del seguimiento de esta tienda? El archivo original se conserva.</p><div className="gd-actions"><button className="primary danger-button small" disabled={busy} onClick={()=>void save('remove',remove)}>Quitar fila</button><button className="secondary small" disabled={busy} onClick={()=>setRemove(null)}>Cancelar</button></div></div>}
   {loading?<p role="status">Cargando entregas…</p>:matches.length===0?<p>{rows.length?'No hay gráficos con estos filtros.':error?'':'Todavía no hay gráficos en el seguimiento de esta tienda.'}</p>:<>
    <div className="table-scroll"><table className="gd-table">
-    <thead><tr><th>Entregado</th><th>Gráfico</th><th>Artículo y clave</th>{canManage&&<th>Acciones</th>}</tr></thead>
+    <thead><tr><th>Entregado</th><th>Código</th><th>Nombre del gráfico</th><th>Clave</th><th>Descripción</th>{canManage&&<th>Acciones</th>}</tr></thead>
     <tbody>{matches.slice(current*pageSize,(current+1)*pageSize).map(row=>{
      const d=row.data;
-     return <tr key={row.id}>
-      <td>{canManage?<input type="checkbox" checked={!!row.delivered_at} disabled={busy||!!draft||!!remove} aria-label={'Entregado: '+d.name} onChange={()=>void save('toggle',row)}/>:row.delivered_at?<Check size={17} aria-label="Entregado"/>:'Pendiente'}
-       {row.delivered_at&&<small>{new Date(row.delivered_at).toLocaleDateString('es-MX',{timeZone:'America/Mexico_City'})}{row.delivered_by?' · '+row.delivered_by:''}</small>}</td>
-      <td><strong>{d.name}</strong><small>{[d.folder,d.origin].filter(Boolean).join(' · ')}</small></td>
-      <td>{d.articles.length>1?<details><summary>{d.articles.length} artículos</summary><ul>{d.articles.map((a,i)=><li key={i}>{[a.description,a.key,a.code].filter(Boolean).join(' · ')}</li>)}</ul></details>:d.articles.length===1?[d.articles[0].description,d.articles[0].key,d.articles[0].code].filter(Boolean).join(' · '):d.family||d.sourceStatus||'—'}</td>
-      {canManage&&<td><div className="gd-actions"><button type="button" className="icon-btn" title="Editar" aria-label={'Editar '+d.name} disabled={busy||!!draft||!!remove} onClick={()=>open(row)}><Pencil size={15}/></button><button type="button" className="icon-btn danger-icon" title="Quitar fila" aria-label={'Quitar '+d.name} disabled={busy||!!draft||!!remove} onClick={()=>{setError('');setRemove(row);}}><Trash2 size={15}/></button></div></td>}
-     </tr>;
+     const articles=articleRows(d);
+     return <Fragment key={row.id}>{articles.map((a,i)=><tr key={i}>
+      {i===0&&<td rowSpan={articles.length}>{canManage?<input type="checkbox" checked={!!row.delivered_at} disabled={busy||!!draft||!!remove} aria-label={'Entregado: '+d.name} onChange={()=>void save('toggle',row)}/>:row.delivered_at?<Check size={17} aria-label="Entregado"/>:'Pendiente'}
+       {row.delivered_at&&<small>{deliveryDate(row)}{row.delivered_by?' · '+row.delivered_by:''}</small>}</td>}
+      <td>{a.code||'—'}</td>
+      {i===0&&<td rowSpan={articles.length}><strong>{d.name}</strong><small>{[d.folder,d.origin].filter(Boolean).join(' · ')}</small></td>}
+      <td>{a.key||'—'}</td>
+      <td>{a.description||'—'}</td>
+      {i===0&&canManage&&<td rowSpan={articles.length}><div className="gd-actions"><button type="button" className="icon-btn" title="Editar" aria-label={'Editar '+d.name} disabled={busy||!!draft||!!remove} onClick={()=>open(row)}><Pencil size={15}/></button><button type="button" className="icon-btn danger-icon" title="Quitar fila" aria-label={'Quitar '+d.name} disabled={busy||!!draft||!!remove} onClick={()=>{setError('');setRemove(row);}}><Trash2 size={15}/></button></div></td>}
+     </tr>)}</Fragment>;
     })}</tbody></table></div>
    {pages>1&&<div className="gd-pagination"><button className="secondary small" disabled={current===0} onClick={()=>setPage(current-1)}><ChevronLeft size={16}/>Anterior</button><span>Página {current+1} de {pages} · {matches.length} gráficos</span><button className="secondary small" disabled={current+1===pages} onClick={()=>setPage(current+1)}>Siguiente<ChevronRight size={16}/></button></div>}
   </>}
