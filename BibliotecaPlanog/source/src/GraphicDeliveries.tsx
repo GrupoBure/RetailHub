@@ -6,7 +6,8 @@ import './graphic-deliveries.css';
 type Api=(path:string,init?:RequestInit)=>Promise<any>;
 type Store={id:string;name:string};
 type Article={description:string;key:string;code:string;status:string;evidence:string;source:string};
-type Data={name:string;folder:string;origin:string;family:string;sourceStatus:string;path:string;articles:Article[]};
+type Data={name:string;folder:string;origin:string;family:string;sourceStatus:string;path:string;notes?:string;articles:Article[]};
+const notesLimit=2000;
 type Row={id:string;data:Data;delivered_at:string|null;delivered_by:string|null;revision:string};
 const martinCarrera='20495f4b-dbe5-4aea-b025-a885ad817a83';
 const pageSize=30;
@@ -23,16 +24,16 @@ const deliveryDate=(row:Row)=>row.delivered_at?new Date(row.delivered_at).toLoca
 const articleRows=(data:Data)=>data.articles.length?data.articles:[{...emptyArticle(),description:data.family||''}];
 type ImportRow={id:string|null;data:Data};
 export function parseDeliveryRows(rows:string[][]):ImportRow[]{
- const aliases=[['codigo'],['nombre del grafico','nombre','grafico'],['clave'],['descripcion','articulo de grupo truper'],['carpeta'],['origen'],['id de grafico'],['ruta de origen']];
+ const aliases=[['codigo'],['nombre del grafico','nombre','grafico'],['clave'],['descripcion','articulo de grupo truper'],['carpeta'],['origen'],['id de grafico'],['ruta de origen'],['notas']];
  const header=rows.slice(0,20).findIndex(row=>aliases.slice(0,4).every(options=>options.some(x=>row.some(value=>clean(value)===x))));
  if(header<0)throw Error('La primera hoja debe tener Código, Nombre del gráfico, Clave y Descripción.');
  const fields=aliases.map(options=>rows[header].findIndex(value=>options.includes(clean(value))));
  const grouped=new Map<string,ImportRow>();
  for(let i=header+1;i<rows.length;i++){
   if(!rows[i].some(x=>x.trim()))continue;
-  const [code,name,key,description,folder,origin,id,path]=fields.map(j=>rows[i][j]?.trim()||'');
+  const [code,name,key,description,folder,origin,id,path,notes]=fields.map(j=>rows[i][j]?.trim()||'');
   const invalid=!name||[code,key,description].some(x=>/^ver (?:detalle|[«"]?articulos)/.test(clean(x)))||
-   [code,name,key,description,folder,origin,path].some((x,j)=>x.length>[32,220,100,350,240,240,1000][j])||
+   [code,name,key,description,folder,origin,path,notes].some((x,j)=>x.length>[32,220,100,350,240,240,1000,notesLimit][j])||
    (id&&!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id));
   if(invalid)throw Error(`Revisa la fila ${i+1}: faltan datos o hay valores inválidos. Usa una línea por código.`);
   const identity=JSON.stringify([name,folder,origin,path]);
@@ -40,6 +41,8 @@ export function parseDeliveryRows(rows:string[][]):ImportRow[]{
   const group=grouped.get(groupKey)||{id:id.toLowerCase()||null,data:{...emptyData(),name,folder,origin,path}};
   const d=group.data;
   if(JSON.stringify([d.name,d.folder,d.origin,d.path])!==identity)throw Error(`El ID de la fila ${i+1} corresponde a más de un gráfico.`);
+  if(d.notes&&notes&&d.notes!==notes)throw Error(`El gráfico «${name}» tiene notas distintas en el Excel.`);
+  if(fields[8]>=0)d.notes=d.notes||notes;
   if(code||key||description){
    if(d.articles.length>=200)throw Error(`El gráfico «${name}» supera 200 artículos.`);
    d.articles.push({...emptyArticle(),code,key,description});
@@ -87,7 +90,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
  const delivered=visibleRows.filter(r=>r.delivered_at).length;
  const needle=clean(query);
  const matches=visibleRows.filter(({data:d,delivered_at})=>(filter==='all'||(filter==='done')===!!delivered_at)&&
-  (!needle||clean([d.name,d.folder,d.origin,d.family,...d.articles.flatMap(a=>[a.description,a.key,a.code])].join(' ')).includes(needle)));
+  (!needle||clean([d.name,d.folder,d.origin,d.family,d.notes,...d.articles.flatMap(a=>[a.description,a.key,a.code])].join(' ')).includes(needle)));
  const pages=Math.max(1,Math.ceil(matches.length/pageSize)),current=Math.min(page,pages-1);
  const storeName=store===martinCarrera?'Martín Carrera':stores.find(s=>s.id===store)?.name||'Tienda';
  async function previewExcel(file:File){
@@ -99,6 +102,12 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
    if(!incoming.length)throw Error('El Excel no contiene gráficos de carpetas visibles.');
    const hiddenIds=new Set(rows.filter(row=>!isVisibleDelivery(row.data)).map(row=>row.id));
    if(incoming.some(row=>row.id&&hiddenIds.has(row.id)))throw Error('El Excel incluye un ID de una carpeta no visible.');
+   for(const row of incoming){
+    if(row.data.notes!==undefined)continue;
+    const previous=visibleRows.filter(old=>row.id?row.id===old.id:
+      row.data.name===old.data.name&&row.data.folder===old.data.folder&&row.data.origin===old.data.origin);
+    if(previous.length===1)row.data.notes=previous[0].data.notes;
+   }
    setReplacement({name:file.name,rows:incoming,expected:rows.map(r=>r.revision)});
   }catch(e){setError((e as Error).message);}
   finally{setBusy(false);}
@@ -115,9 +124,9 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
   finally{setBusy(false);}
  }
  function exportExcel(){
-  const table=[['Código','Nombre del gráfico','Clave','Descripción','Estado','Carpeta','Origen','Fecha de entrega','Registró','Tienda','ID de gráfico','Ruta de origen'],
-   ...matches.flatMap(row=>articleRows(row.data).map(a=>[a.code,row.data.name,a.key,a.description,row.delivered_at?'Entregado':'Pendiente',row.data.folder,row.data.origin,deliveryDate(row),row.delivered_by||'',storeName,row.id,row.data.path]))];
-  const book=tabularWorkbook(table,'Entregas',[15,52,20,64,17,29,29,20,20,22,40,52]);
+  const table=[['Código','Nombre del gráfico','Clave','Descripción','Estado','Carpeta','Origen','Fecha de entrega','Registró','Tienda','ID de gráfico','Ruta de origen','Notas'],
+   ...matches.flatMap(row=>articleRows(row.data).map(a=>[a.code,row.data.name,a.key,a.description,row.delivered_at?'Entregado':'Pendiente',row.data.folder,row.data.origin,deliveryDate(row),row.delivered_by||'',storeName,row.id,row.data.path,row.data.notes||'']))];
+  const book=tabularWorkbook(table,'Entregas',[15,52,20,64,17,29,29,20,20,22,40,52,38]);
   const url=URL.createObjectURL(new Blob([book.buffer as ArrayBuffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
   const link=document.createElement('a');
   link.href=url;link.download='Entregas de gráficos - '+storeName.replace(/[\\/:*?"<>|]/g,'-')+'.xlsx';
@@ -143,7 +152,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
   }catch(e){setError((e as Error).message);}
   finally{setBusy(false);}
  }
- function setData(key:'name'|'folder'|'origin'|'family',value:string){
+ function setData(key:'name'|'folder'|'origin'|'family'|'notes',value:string){
   setDraft(old=>old&&({...old,data:{...old.data,[key]:value}}));
  }
  function setArticle(index:number,key:'description'|'key'|'code',value:string){
@@ -184,6 +193,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
     <label>Origen<input maxLength={240} value={draft.data.origin} onChange={e=>setData('origin',e.target.value)}/></label>
     <label>Familia<input maxLength={300} value={draft.data.family} onChange={e=>setData('family',e.target.value)}/></label>
    </div>
+   <label>Notas<textarea rows={3} maxLength={notesLimit} value={draft.data.notes??''} onChange={e=>setData('notes',e.target.value)}/></label>
    <h4>Artículos de Truper</h4>
    {draft.data.articles.map((a,i)=><div className="gd-article-edit" key={i}>
     <label>Artículo<input maxLength={350} value={a.description} onChange={e=>setArticle(i,'description',e.target.value)}/></label>
@@ -197,7 +207,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
   {remove&&<div ref={confirmation} className="gd-editor" role="group" aria-label="Confirmar retiro"><p>¿Quitar <strong>{remove.data.name}</strong> del seguimiento de esta tienda? El archivo original se conserva.</p><div className="gd-actions"><button className="primary danger-button small" disabled={busy} onClick={()=>void save('remove',remove)}>Quitar fila</button><button className="secondary small" disabled={busy} onClick={()=>setRemove(null)}>Cancelar</button></div></div>}
   {loading?<p role="status">Cargando entregas…</p>:matches.length===0?<p>{visibleRows.length?'No hay gráficos con estos filtros.':error?'':'Todavía no hay gráficos visibles en el seguimiento de esta tienda.'}</p>:<>
    <div className="table-scroll"><table className="gd-table">
-    <thead><tr><th>Entregado</th><th>Código</th><th>Nombre del gráfico</th><th>Clave</th><th>Descripción</th>{canManage&&<th>Acciones</th>}</tr></thead>
+    <thead><tr><th>Entregado</th><th>Código</th><th>Nombre del gráfico</th><th>Clave</th><th>Descripción</th><th>Notas</th>{canManage&&<th>Acciones</th>}</tr></thead>
     <tbody>{matches.slice(current*pageSize,(current+1)*pageSize).map(row=>{
      const d=row.data;
      const articles=articleRows(d);
@@ -208,6 +218,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
       {i===0&&<td rowSpan={articles.length}><strong>{d.name}</strong><small>{[d.folder,d.origin].filter(Boolean).join(' · ')}</small></td>}
       <td>{a.key||'—'}</td>
       <td>{a.description||'—'}</td>
+      {i===0&&<td rowSpan={articles.length} style={{minWidth:150,maxWidth:260,whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{d.notes||'—'}</td>}
 {i===0&&canManage&&<td rowSpan={articles.length}><div className="gd-actions"><button type="button" className="icon-btn" title="Editar" aria-label={'Editar '+d.name} disabled={busy||!!draft||!!remove||!!replacement} onClick={()=>open(row)}><Pencil size={15}/></button><button type="button" className="icon-btn danger-icon" title="Quitar fila" aria-label={'Quitar '+d.name} disabled={busy||!!draft||!!remove||!!replacement} onClick={()=>{setError('');setRemove(row);}}><Trash2 size={15}/></button></div></td>}
      </tr>)}</Fragment>;
     })}</tbody></table></div>
