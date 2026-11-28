@@ -500,11 +500,11 @@ async function graphicFolderSnapshot(folder:unknown){
 function validateGraphicDelivery(data:any){
  const str=(v:unknown,max:number)=>typeof v==='string'&&v.length<=max;
  if(!data||!str(data.name,220)||!data.name.trim()||!str(data.folder,240)||!str(data.origin,240)||
-  !str(data.family,300)||!str(data.sourceStatus,120)||!str(data.path,1000)||
+  !str(data.family,300)||!str(data.sourceStatus,120)||!str(data.path,1000)||(data.notes!==undefined&&!str(data.notes,2000))||
   !Array.isArray(data.articles)||data.articles.length>200||
   data.articles.some((a:any)=>!a||!str(a.description,350)||!str(a.key,100)||!str(a.code,32)||
    !str(a.status,150)||!str(a.evidence,180)||!str(a.source,950)||!(a.description.trim()||a.key.trim()||a.code.trim())))throw new PortalError(400,'Revisa los datos de la fila y sus artículos.');
- return {name:data.name.trim(),folder:data.folder.trim(),origin:data.origin.trim(),family:data.family.trim(),sourceStatus:data.sourceStatus,path:data.path,
+ return {name:data.name.trim(),folder:data.folder.trim(),origin:data.origin.trim(),family:data.family.trim(),sourceStatus:data.sourceStatus,path:data.path,notes:data.notes?.trim()??'',
   articles:data.articles.map((a:any)=>({description:a.description.trim(),key:a.key.trim(),code:a.code.trim(),status:a.status,evidence:a.evidence,source:a.source}))};
 }
 
