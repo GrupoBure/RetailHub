@@ -13,6 +13,12 @@ const pageSize=30;
 const emptyArticle=():Article=>({description:'',key:'',code:'',status:'',evidence:'',source:''});
 const emptyData=():Data=>({name:'',folder:'',origin:'',family:'',sourceStatus:'',path:'',articles:[]});
 const clean=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+export function isVisibleDelivery(data:Pick<Data,'folder'|'origin'|'path'>){
+ return ![data.folder,data.origin,data.path].some(value=>value.split(/[\\/·]/).some(part=>{
+  const name=clean(part).replace(/[_\s-]+/g,' ');
+  return name==='graficos no visibles'||name==='guias de impresion';
+ }));
+}
 const deliveryDate=(row:Row)=>row.delivered_at?new Date(row.delivered_at).toLocaleDateString('es-MX',{timeZone:'America/Mexico_City'}):'';
 const articleRows=(data:Data)=>data.articles.length?data.articles:[{...emptyArticle(),description:data.family||''}];
 type ImportRow={id:string|null;data:Data};
@@ -77,9 +83,10 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
  },[path,store,refresh]);
  useEffect(()=>{if(draft)form.current?.scrollIntoView({block:'nearest'});},[draft?.row?.id,!!draft]);
  useEffect(()=>{if(remove)confirmation.current?.scrollIntoView({block:'nearest'});},[remove]);
- const delivered=rows.filter(r=>r.delivered_at).length;
+ const visibleRows=rows.filter(r=>isVisibleDelivery(r.data));
+ const delivered=visibleRows.filter(r=>r.delivered_at).length;
  const needle=clean(query);
- const matches=rows.filter(({data:d,delivered_at})=>(filter==='all'||(filter==='done')===!!delivered_at)&&
+ const matches=visibleRows.filter(({data:d,delivered_at})=>(filter==='all'||(filter==='done')===!!delivered_at)&&
   (!needle||clean([d.name,d.folder,d.origin,d.family,...d.articles.flatMap(a=>[a.description,a.key,a.code])].join(' ')).includes(needle)));
  const pages=Math.max(1,Math.ceil(matches.length/pageSize)),current=Math.min(page,pages-1);
  const storeName=store===martinCarrera?'Martín Carrera':stores.find(s=>s.id===store)?.name||'Tienda';
@@ -88,7 +95,10 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
   try{
    if(!/\.xlsx$/i.test(file.name)||file.size>20000000||!file.size)throw Error('Selecciona un archivo XLSX de hasta 20 MB.');
    const {readXlsx}=await import('./quote-import');
-   const incoming=parseDeliveryRows(await readXlsx(await file.arrayBuffer(),10001,true));
+   const incoming=parseDeliveryRows(await readXlsx(await file.arrayBuffer(),10001,true)).filter(row=>isVisibleDelivery(row.data));
+   if(!incoming.length)throw Error('El Excel no contiene gráficos de carpetas visibles.');
+   const hiddenIds=new Set(rows.filter(row=>!isVisibleDelivery(row.data)).map(row=>row.id));
+   if(incoming.some(row=>row.id&&hiddenIds.has(row.id)))throw Error('El Excel incluye un ID de una carpeta no visible.');
    setReplacement({name:file.name,rows:incoming,expected:rows.map(r=>r.revision)});
   }catch(e){setError((e as Error).message);}
   finally{setBusy(false);}
@@ -97,9 +107,10 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
   if(!replacement||busy)return;
   setBusy(true);setError('');
   try{
-   const result=await api(path+'/replace',{method:'POST',body:JSON.stringify({rows:replacement.rows,expected:replacement.expected})});
+   const hidden=rows.filter(row=>!isVisibleDelivery(row.data)).map(({id,data})=>({id,data}));
+   await api(path+'/replace',{method:'POST',body:JSON.stringify({rows:[...replacement.rows,...hidden],expected:replacement.expected})});
    setReplacement(null);setQuery('');setFilter('all');setLoading(true);setRefresh(x=>x+1);
-   setNotice(`Se cargaron ${result.count} gráficos en ${storeName}.`);
+   setNotice(`Se cargaron ${replacement.rows.length} gráficos en ${storeName}.`);
   }catch(e){setError((e as Error).message);}
   finally{setBusy(false);}
  }
@@ -156,12 +167,12 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
     <button className="secondary small" type="button" disabled={busy||loading||!!draft||!!remove||!!replacement} onClick={()=>open()}><Plus size={16}/>Agregar fila</button>
    </>}
   </div>
-  {!loading&&<p className="gd-count"><strong>{delivered} entregados</strong><span>{rows.length-delivered} pendientes</span><span>{rows.length} en total</span></p>}
+  {!loading&&<p className="gd-count"><strong>{delivered} entregados</strong><span>{visibleRows.length-delivered} pendientes</span><span>{visibleRows.length} en total</span></p>}
   {error&&<p className="error-banner" role="alert">{error}</p>}
   {notice&&<p role="status">{notice}</p>}
   {replacement&&<div className="gd-editor" role="group" aria-label="Confirmar reemplazo con Excel">
    <h3>Reemplazar lista de {storeName}</h3>
-   <p><strong>{replacement.name}</strong> cargará {replacement.rows.length} gráficos en lugar de los {rows.length} actuales. Los gráficos que falten en el Excel se quitarán del seguimiento de esta tienda.</p>
+   <p><strong>{replacement.name}</strong> cargará {replacement.rows.length} gráficos visibles en lugar de los {visibleRows.length} actuales. Los gráficos visibles que falten en el Excel se quitarán del seguimiento de esta tienda.</p>
    <p>Las entregas registradas se conservan al coincidir el ID o, cuando falta el ID, un único nombre con la misma carpeta y origen. Los gráficos nuevos quedan pendientes.</p>
    <div className="gd-actions"><button className="primary danger-button small" disabled={busy} onClick={()=>void replaceExcel()}>{busy?'Reemplazando…':'Confirmar reemplazo'}</button><button className="secondary small" disabled={busy} onClick={()=>setReplacement(null)}>Cancelar</button></div>
   </div>}
@@ -184,7 +195,7 @@ export default function GraphicDeliveries({api,canManage}:{api:Api;canManage:boo
    <div className="gd-actions"><button className="primary small" disabled={busy}>Guardar fila</button><button type="button" className="secondary small" disabled={busy} onClick={()=>setDraft(null)}>Cancelar</button></div>
   </form>}
   {remove&&<div ref={confirmation} className="gd-editor" role="group" aria-label="Confirmar retiro"><p>¿Quitar <strong>{remove.data.name}</strong> del seguimiento de esta tienda? El archivo original se conserva.</p><div className="gd-actions"><button className="primary danger-button small" disabled={busy} onClick={()=>void save('remove',remove)}>Quitar fila</button><button className="secondary small" disabled={busy} onClick={()=>setRemove(null)}>Cancelar</button></div></div>}
-  {loading?<p role="status">Cargando entregas…</p>:matches.length===0?<p>{rows.length?'No hay gráficos con estos filtros.':error?'':'Todavía no hay gráficos en el seguimiento de esta tienda.'}</p>:<>
+  {loading?<p role="status">Cargando entregas…</p>:matches.length===0?<p>{visibleRows.length?'No hay gráficos con estos filtros.':error?'':'Todavía no hay gráficos visibles en el seguimiento de esta tienda.'}</p>:<>
    <div className="table-scroll"><table className="gd-table">
     <thead><tr><th>Entregado</th><th>Código</th><th>Nombre del gráfico</th><th>Clave</th><th>Descripción</th>{canManage&&<th>Acciones</th>}</tr></thead>
     <tbody>{matches.slice(current*pageSize,(current+1)*pageSize).map(row=>{
